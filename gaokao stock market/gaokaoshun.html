@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高考顺 · 最终修正版</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: "Microsoft Yahei", "PingFang SC", sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        :root { --up-color: #ec0000; --up-border: #8A0000; --down-color: #00da3c; --down-border: #008F28; --panel-bg: #16213e; --border-color: #0f3460; --text-secondary: #aaa; }
+        .header { height: 56px; background: var(--panel-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 24px; gap: 20px; flex-shrink: 0; }
+        .logo { font-size: 17px; font-weight: bold; color: var(--up-color); letter-spacing: 1px; }
+        .tabs { display: flex; gap: 2px; height: 100%; align-items: flex-end; }
+        .tab { padding: 10px 28px; cursor: pointer; border-radius: 6px 6px 0 0; color: var(--text-secondary); transition: all 0.2s; font-size: 14px; border: 1px solid transparent; border-bottom: none; margin-bottom: -1px; }
+        .tab.active { background: #1a1a2e; color: #fff; border-color: var(--border-color); }
+        .header-actions { margin-left: auto; display: flex; gap: 12px; align-items: center; flex-wrap: nowrap; }
+        .header-actions .btn { padding: 6px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; background: var(--border-color); color: #fff; }
+        .header-actions .btn-primary { background: var(--up-color); }
+        .header-actions .btn:hover { opacity: 0.85; }
+        .main-container { flex: 1; display: flex; overflow: hidden; }
+        .sidebar { width: 300px; background: var(--panel-bg); border-right: 1px solid var(--border-color); padding: 18px; overflow-y: auto; flex-shrink: 0; }
+        .chart-area { flex: 1; padding: 15px; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+        #klineChart { flex: 2; background: var(--panel-bg); border-radius: 6px; min-height: 0; }
+        #volumeChart { flex: 1; background: var(--panel-bg); border-radius: 6px; flex-shrink: 0; }
+        #spreadChart { flex: 1; background: var(--panel-bg); border-radius: 6px; flex-shrink: 0; }
+        .panel-title { font-size: 14px; font-weight: bold; margin-bottom: 12px; color: #fff; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; margin-bottom: 5px; font-size: 12px; color: var(--text-secondary); }
+        select, input { width: 100%; padding: 7px 10px; background: #0f3460; border: 1px solid #1a1a2e; color: #fff; border-radius: 4px; outline: none; font-size: 13px; }
+        select:focus, input:focus { border-color: var(--up-color); }
+        .btn { width: 100%; padding: 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; transition: opacity 0.2s; }
+        .btn-primary { background: var(--up-color); color: #fff; }
+        .btn-secondary { background: var(--border-color); color: #fff; margin-top: 8px; }
+        .btn-success { background: #27ae60; color: #fff; margin-top: 8px; }
+        .btn:hover { opacity: 0.85; }
+        .data-list { margin-top: 12px; max-height: 200px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; }
+        .data-item { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+        .data-item:last-child { border-bottom: none; }
+        .data-item .del-btn { color: var(--down-color); cursor: pointer; font-size: 13px; }
+        .data-item .del-btn:hover { text-decoration: underline; }
+        .info-bar { padding: 10px 18px; background: var(--panel-bg); border-radius: 6px; display: flex; gap: 32px; font-size: 13px; flex-wrap: wrap; flex-shrink: 0; }
+        .info-item { display: flex; align-items: center; gap: 6px; }
+        .info-item .label { color: var(--text-secondary); }
+        .info-item .value { font-weight: bold; font-size: 15px; }
+        .up { color: var(--up-color); }
+        .down { color: var(--down-color); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .form-row { display: flex; gap: 8px; }
+        .form-row .form-group { flex: 1; }
+        .ma-settings { display: flex; gap: 8px; flex-wrap: wrap; }
+        .ma-settings .form-group { flex: 1; min-width: 60px; }
+        .import-section { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--border-color); }
+        .import-tip { font-size: 11px; color: #777; line-height: 1.6; margin-top: 8px; }
+        .import-tip strong { color: #999; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #1a4a7a; }
+        .status-bar { padding: 6px 16px; background: #0f3460; font-size: 12px; color: #aaa; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+        .status-bar .highlight { color: #fff; font-weight: bold; }
+        .help-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.75);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .help-overlay.active { display: flex; }
+        .help-box {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 900px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            color: #ddd;
+            font-size: 14px;
+            line-height: 1.8;
+            position: relative;
+        }
+        .help-box h2 { color: #fff; font-size: 22px; border-bottom: 2px solid var(--border-color); padding-bottom: 12px; margin-bottom: 20px; }
+        .help-box h3 { color: var(--up-color); font-size: 17px; margin-top: 24px; margin-bottom: 10px; border-left: 4px solid var(--up-color); padding-left: 12px; }
+        .help-box h4 { color: #f39c12; font-size: 15px; margin-top: 16px; margin-bottom: 6px; }
+        .help-box ul, .help-box ol { margin-left: 20px; margin-bottom: 12px; }
+        .help-box li { margin-bottom: 4px; }
+        .help-box code { background: #0f3460; padding: 2px 8px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #f1c40f; }
+        .help-box .highlight-box { background: #0a1a2e; border-left: 4px solid var(--up-color); padding: 12px 16px; border-radius: 4px; margin: 12px 0; }
+        .help-box .close-btn {
+            position: sticky;
+            top: 0;
+            float: right;
+            background: var(--border-color);
+            color: #fff;
+            border: none;
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            font-size: 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+            z-index: 10;
+        }
+        .help-box .close-btn:hover { background: var(--up-color); }
+        .help-box .tag { display: inline-block; background: var(--border-color); border-radius: 12px; padding: 0 10px; font-size: 12px; color: #aaa; margin-right: 6px; }
+        .help-box .example { background: #0a1a2e; padding: 8px 12px; border-radius: 4px; font-family: monospace; font-size: 13px; margin: 4px 0; }
+        .help-box .note { color: #f39c12; font-size: 13px; }
+        .help-box .kline-demo { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; margin: 8px 0; }
+        .help-box .kline-demo span { display: inline-block; width: 30px; height: 30px; border-radius: 4px; text-align: center; line-height: 30px; font-weight: bold; }
+        .help-box .kline-demo .red { background: var(--up-color); color: #fff; }
+        .help-box .kline-demo .green { background: var(--down-color); color: #fff; }
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-overlay.active { display: flex; }
+        .modal-box { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; min-width: 300px; max-width: 500px; }
+        .modal-box h3 { margin-bottom: 16px; color: #fff; }
+        .modal-box .btn-row { display: flex; gap: 12px; margin-top: 16px; }
+        .modal-box .btn-row .btn { flex: 1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">📊 高考顺</div>
+        <div class="tabs">
+            <div class="tab active" data-tab="market">大盘</div>
+            <div class="tab" data-tab="plate">板块</div>
+            <div class="tab" data-tab="stock">个股</div>
+            <div class="tab" data-tab="help" style="color: #f39c12;">📖 说明</div>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-primary" onclick="document.getElementById('folderInput').click()">📁 加载文件夹</button>
+            <button class="btn" onclick="exportAllData()">📤 导出全部</button>
+            <input type="file" id="folderInput" webkitdirectory multiple accept=".xlsx,.xls" style="display:none" onchange="loadFolder(event)">
+        </div>
+    </div>
+    <div class="status-bar">
+        <span id="statusText">请加载数据文件夹（Excel 需包含位次、分数列）</span>
+        <span id="statusCount"></span>
+    </div>
+    <div class="main-container">
+        <div class="sidebar">
+            <!-- 大盘 -->
+            <div class="tab-content active" id="market-content">
+                <div class="panel-title">选择大盘指数</div>
+                <div class="form-group">
+                    <select id="marketSelect">
+                        <option value="east">东部指数</option><option value="jiaodong">胶东指数</option>
+                        <option value="central">中部指数</option><option value="southwest">西南指数</option>
+                        <option value="beibuwan">北部湾指数</option><option value="northeast">东北指数</option>
+                        <option value="northwest">西北指数</option>
+                    </select>
+                </div>
+                <div class="panel-title" style="margin-top:18px;">手动录入（位次）</div>
+                <div class="form-row"><div class="form-group"><label>年份</label><input type="number" id="market-year"></div></div>
+                <div class="form-row">
+                    <div class="form-group"><label>开盘位次</label><input type="number" id="market-open"></div>
+                    <div class="form-group"><label>收盘位次</label><input type="number" id="market-close"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>最高位次(靠前)</label><input type="number" id="market-high"></div>
+                    <div class="form-group"><label>最低位次(靠后)</label><input type="number" id="market-low"></div>
+                </div>
+                <div class="form-group"><label>招生总人数</label><input type="number" id="market-volume"></div>
+                <button class="btn btn-primary" onclick="addData('market')">添加该年度数据</button>
+                <div class="panel-title" style="margin-top:18px;">历史数据列表</div>
+                <div class="data-list" id="market-data-list"></div>
+            </div>
+            <!-- 板块 -->
+            <div class="tab-content" id="plate-content">
+                <div class="panel-title">选择板块</div>
+                <div class="form-group">
+                    <label>学校所在地</label>
+                    <select id="plate-province">
+                        <option value="all">全部省份</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>所属区域</label>
+                    <select id="plate-region">
+                        <option value="east">东部指数</option><option value="jiaodong">胶东指数</option>
+                        <option value="central">中部指数</option><option value="southwest">西南指数</option>
+                        <option value="beibuwan">北部湾指数</option><option value="northeast">东北指数</option>
+                        <option value="northwest">西北指数</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>院校板块</label>
+                    <select id="plate-type">
+                        <option value="all">全部板块</option><option value="92">92板块</option>
+                        <option value="doublefirst">双一流板块</option>
+                        <option value="newresearch">新型研究型大学板块</option>
+                        <option value="s11">S11中外合办板块</option>
+                        <option value="shuangfei">双非板块</option>
+                    </select>
+                </div>
+                <div class="panel-title" style="margin-top:18px;">手动录入（位次）</div>
+                <div class="form-row"><div class="form-group"><label>年份</label><input type="number" id="plate-year"></div></div>
+                <div class="form-row">
+                    <div class="form-group"><label>开盘位次</label><input type="number" id="plate-open"></div>
+                    <div class="form-group"><label>收盘位次</label><input type="number" id="plate-close"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>最高位次(靠前)</label><input type="number" id="plate-high"></div>
+                    <div class="form-group"><label>最低位次(靠后)</label><input type="number" id="plate-low"></div>
+                </div>
+                <div class="form-group"><label>招生总人数</label><input type="number" id="plate-volume"></div>
+                <button class="btn btn-primary" onclick="addData('plate')">添加该年度数据</button>
+                <div class="panel-title" style="margin-top:18px;">历史数据列表</div>
+                <div class="data-list" id="plate-data-list"></div>
+            </div>
+            <!-- 个股 -->
+            <div class="tab-content" id="stock-content">
+                <div class="panel-title">选择院校与招生省份</div>
+                <div class="form-group"><label>院校名称</label><input type="text" id="stock-school" placeholder="如：天津工业大学"></div>
+                <div class="form-group"><label>招生省份</label><input type="text" id="stock-province" placeholder="如：天津"></div>
+                <div class="form-group">
+                    <label>所属板块</label>
+                    <select id="stock-plate">
+                        <option value="92">92板块</option><option value="doublefirst">双一流板块</option>
+                        <option value="newresearch">新型研究型大学板块</option><option value="s11">S11中外合办板块</option>
+                        <option value="shuangfei">双非板块</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" onclick="loadStockData()">加载/新建个股</button>
+                <div class="form-group" id="major-select-group" style="display:none;">
+                    <label>选择专业</label>
+                    <select id="majorSelect" onchange="onMajorChange()">
+                        <option value="__all__">全部专业（院校整体）</option>
+                    </select>
+                </div>
+                <div class="panel-title" style="margin-top:18px;">手动录入（位次+分数）</div>
+                <div class="form-row"><div class="form-group"><label>专业名称</label><input type="text" id="stock-major"></div></div>
+                <div class="form-row"><div class="form-group"><label>年份</label><input type="number" id="stock-year"></div></div>
+                <div class="form-row">
+                    <div class="form-group"><label>最高分</label><input type="number" id="stock-highScore" step="0.1"></div>
+                    <div class="form-group"><label>最低分</label><input type="number" id="stock-lowScore" step="0.1"></div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group"><label>最高位次(靠前)</label><input type="number" id="stock-highRank"></div>
+                    <div class="form-group"><label>最低位次(靠后)</label><input type="number" id="stock-lowRank"></div>
+                </div>
+                <div class="form-group"><label>录取人数</label><input type="number" id="stock-volume"></div>
+                <button class="btn btn-primary" onclick="addMajorData()">添加该专业年度数据</button>
+                <button class="btn btn-success" onclick="showExportModal()">📤 导出当前个股数据</button>
+                <div class="panel-title" style="margin-top:18px;">历史数据列表</div>
+                <div class="data-list" id="stock-data-list"></div>
+            </div>
+        </div>
+        <!-- 图表区 -->
+        <div class="chart-area">
+            <div class="info-bar">
+                <div class="info-item"><span class="label">当前标的：</span><span class="value" id="currentName">-</span></div>
+                <div class="info-item"><span class="label">最新收盘位次：</span><span class="value up" id="currentPrice">-</span></div>
+                <div class="info-item"><span class="label">涨跌幅：</span><span class="value up" id="changeRate">-</span></div>
+                <div class="info-item"><span class="label">招生人数：</span><span class="value" id="currentVolume">-</span></div>
+                <div class="info-item"><span class="label">历史最高位次：</span><span class="value" id="historyHigh">-</span></div>
+                <div class="info-item"><span class="label">历史最低位次：</span><span class="value" id="historyLow">-</span></div>
+            </div>
+            <div id="klineChart"></div>
+            <div id="volumeChart"></div>
+            <div id="spreadChart"></div>
+        </div>
+    </div>
+    <!-- 导出弹窗 -->
+    <div class="modal-overlay" id="exportModal">
+        <div class="modal-box">
+            <h3>📤 导出格式</h3>
+            <div class="form-group">
+                <label>选择导出格式</label>
+                <select id="exportFormat">
+                    <option value="vertical">纵向专业格式（含位次、分数）</option>
+                    <option value="horizontal">横向年份格式（仅整体位次）</option>
+                </select>
+            </div>
+            <div class="btn-row">
+                <button class="btn btn-secondary" onclick="closeExportModal()">取消</button>
+                <button class="btn btn-primary" onclick="exportStockData()">确认导出</button>
+            </div>
+        </div>
+    </div>
+    <!-- 说明弹窗 -->
+    <div class="help-overlay" id="helpOverlay">
+        <div class="help-box">
+            <button class="close-btn" onclick="closeHelp()">✕</button>
+            <h2>📖 高考顺 · 完整使用说明</h2>
+            <h3>1. 核心概念与数据来源</h3>
+            <p>本系统将高考录取数据对标<strong>股票K线分析</strong>，用 <strong>位次（排名）</strong> 作为核心指标，因为位次不受试卷难度影响，跨年可比。数据应来自各省教育考试院官方发布的《普通高校在津招生录取最低分统计表》或高校官网的录取分数统计。</p>
+            <h3>2. 数据文件格式</h3>
+            <h4>📁 文件夹结构</h4>
+            <ul>
+                <li>按 <strong>学校所在地</strong> 分文件夹存放，例如：<code>天津/</code> 文件夹放天津工业大学等天津高校的Excel文件。</li>
+                <li>系统会递归读取所有子文件夹中的 <code>.xlsx</code> 或 <code>.xls</code> 文件，且支持多次加载不同省份文件夹，数据会合并。</li>
+            </ul>
+            <h4>📄 文件名规范</h4>
+            <div class="highlight-box">
+                <code>年份 招生省份 院校名称 板块 考生数.xlsx</code><br>
+                示例：<code>2025 天津 天津工业大学 doublefirst 70800.xlsx</code>
+                <ul style="margin-top:6px; list-style:none; padding-left:0;">
+                    <li>• 年份：4位数字，如 <code>2025</code></li>
+                    <li>• 招生省份：该院校在哪个省招生，如 <code>天津</code></li>
+                    <li>• 院校名称：如 <code>天津工业大学</code>（可含空格）</li>
+                    <li>• 板块：<code>92</code> / <code>doublefirst</code> / <code>newresearch</code> / <code>s11</code> / <code>shuangfei</code></li>
+                    <li>• 考生数（可选）：该招生省份当年的总考生人数，用于大盘百分位数计算，如 <code>70800</code></li>
+                </ul>
+            </div>
+            <h4>📊 Excel 内部列（必须包含）</h4>
+            <div class="highlight-box">
+                <code>专业名称, 最高分, 最低分, 最高位次, 最低位次, 录取人数</code>
+                <ul style="margin-top:6px; list-style:none; padding-left:0;">
+                    <li>• 专业名称：如 <code>计算机科学与技术</code></li>
+                    <li>• 最高分 / 最低分：该专业录取的最高/最低分数（可留空，但建议填）</li>
+                    <li>• 最高位次：该专业录取的最高位次（靠前，即该分数对应的累计人数）</li>
+                    <li>• 最低位次：该专业录取的最低位次（靠后，即该分数对应的累计人数）</li>
+                    <li>• 录取人数：该专业招生人数</li>
+                </ul>
+                <div class="note">⚠️ 如果缺少“最高分”或“最高位次”，系统会自动用“最低分”或“最低位次”填充。</div>
+            </div>
+            <h3>3. 核心计算公式</h3>
+            <h4>📌 专业加权平均位次</h4>
+            <p>每个专业的平均位次 = (最高位次 + 最低位次) ÷ 2（如果只有最低位次，则用最低位次）。</p>
+            <h4>📌 院校加权平均位次（个股 Close）</h4>
+            <p>全校加权平均位次 = Σ(专业平均位次 × 专业录取人数) ÷ Σ(专业录取人数)</p>
+            <h4>📌 开盘位次（Open）</h4>
+            <p>当年开盘位次 = 上一年收盘位次（第一年开盘位次 = 当年收盘位次）</p>
+            <h4>📌 大盘指数（百分位数）</h4>
+            <p>大区（如东部）加权平均位次 ÷ 该区域所有招生省份的考生总数 × 100<br>数值越小 → 该区域考生整体竞争越激烈（越难考）</p>
+            <h4>📌 地区板块热度指数</h4>
+            <p>热度指数 = 100 - 百分位数<br>数值越大 → 该地区高校整体越热门（越难考）<br>计算过程：先按学校所在地分组，将所有该地区高校在全国各省的录取位次按招生人数加权，得到加权平均位次，再除以参考总人数得到百分位数，最后取反转为热度指数。</p>
+            <h3>4. 如何看懂 K 线</h3>
+            <div class="kline-demo">
+                <span class="red">红柱</span> 表示 <strong>热度上升</strong>（位次下降 / 指数上升）
+                <span class="green">绿柱</span> 表示 <strong>热度下降</strong>（位次上升 / 指数下降）
+            </div>
+            <ul>
+                <li><strong>实体</strong>：从开盘到收盘的区间，实体越长说明当年变化越大。</li>
+                <li><strong>上影线</strong>：当年最高点（最高位次 / 最高指数）。</li>
+                <li><strong>下影线</strong>：当年最低点（最低位次 / 最低指数）。</li>
+                <li><strong>成交量柱</strong>：当年招生总人数，柱色与K线颜色一致，便于量价配合分析。</li>
+                <li><strong>移动均线（MA）</strong>：MA5/10/20/30 分别为近5/10/20/30年的收盘加权平均位次，用于判断长期趋势。</li>
+                <li><strong>标记点</strong>：红点标注历史最高位次（最难年份），绿点标注历史最低位次（最容易年份）。</li>
+            </ul>
+            <h3>5. 不同走势的含义</h3>
+            <ul>
+                <li><strong>连续红柱</strong> → 录取难度逐年上升，热度持续增加，报考竞争加剧。</li>
+                <li><strong>连续绿柱</strong> → 录取难度逐年下降，热度减退，报考更容易。</li>
+                <li><strong>K线在均线上方</strong> → 当前热度高于长期平均水平。</li>
+                <li><strong>K线在均线下方</strong> → 当前热度低于长期平均水平。</li>
+                <li><strong>MA5上穿MA20（金叉）</strong> → 短期热度开始超过中长期均值，可能启动上升趋势。</li>
+                <li><strong>MA5下穿MA20（死叉）</strong> → 短期热度走弱，可能继续降温。</li>
+                <li><strong>量价背离</strong>：分数上涨但招生人数大幅缩减 → 热度可能靠“饥饿营销”虚高，需警惕泡沫。</li>
+            </ul>
+            <h3>6. 各指数用途</h3>
+            <ul>
+                <li><strong>大盘（东部/中部等）</strong>：反映该区域考生整体竞争激烈程度。数值越小说明该区域考生越难考。</li>
+                <li><strong>地区板块（天津/浙江等）</strong>：反映该地区高校整体热门程度。数值越大说明该地区高校越受欢迎。</li>
+                <li><strong>院校板块（92/S11等）</strong>：反映该类型高校的整体热度趋势，便于比较不同层次院校的报考热度。</li>
+                <li><strong>个股</strong>：查看具体院校的历年录取位次走势，可用于分析该校的报考难度变化。</li>
+            </ul>
+            <h3>7. 操作提示</h3>
+            <ul>
+                <li>点击 <strong>“📁 加载文件夹”</strong> 选择存放所有Excel的根目录，系统自动读取全部文件。</li>
+                <li>切换 <strong>大盘 / 板块 / 个股</strong> 标签查看不同维度的K线图。</li>
+                <li>在 <strong>“个股”</strong> 页面输入院校名称和招生省份，点击“加载/新建个股”可查看该校数据。</li>
+                <li>在 <strong>“板块”</strong> 页面可以选择“学校所在地”查看地区热度，或选择“区域+院校板块”查看组合指数。</li>
+                <li>均线周期（MA1~MA4）可在左侧面板自定义调整，点击“更新均线”生效。</li>
+                <li>点击 <strong>“📤 导出当前个股数据”</strong> 可将当前院校数据导出为Excel（纵向专业格式或横向年份格式）。</li>
+                <li>点击 <strong>“📤 导出全部”</strong> 可批量导出所有院校数据（逐个院校导出）。</li>
+            </ul>
+            <h3>8. 数据补充与修正</h3>
+            <ul>
+                <li>如果官方数据缺失“最高分”或“最高位次”，系统会用“最低分”/“最低位次”自动填充，K线上影线将缺失，但收盘价仍准确。</li>
+                <li>手动录入数据时，请确保录入“年份”、“最高位次”、“最低位次”和“录取人数”，分数可为空。</li>
+                <li>大盘百分位数依赖于“考生数”字段，请确保文件名中包含或手动设置。</li>
+            </ul>
+            <div class="note" style="margin-top:16px;">💡 本系统持续更新中，如有疑问或建议，欢迎反馈。</div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 全局配置 ====================
+        const REGION_GROUP = {
+            east: ["北京","天津","上海","江苏","浙江","福建","广东"],
+            jiaodong: ["山东"],
+            central: ["河北","河南","湖北","湖南","江西","安徽"],
+            southwest: ["四川","重庆","云南","贵州"],
+            beibuwan: ["广西","海南"],
+            northeast: ["黑龙江","吉林","辽宁"],
+            northwest: ["陕西","山西"]
+        };
+        const REGION_CN = { east:"东部指数", jiaodong:"胶东指数", central:"中部指数", southwest:"西南指数", beibuwan:"北部湾指数", northeast:"东北指数", northwest:"西北指数" };
+        const PLATE_CN = { "92":"92板块", "doublefirst":"双一流板块", "newresearch":"新型研究型大学板块", "s11":"S11中外合办板块", "shuangfei":"双非板块" };
+        const upColor = '#ec0000', upBorderColor = '#8A0000', downColor = '#00da3c', downBorderColor = '#008F28';
+        const klineChart = echarts.init(document.getElementById('klineChart'));
+        const volumeChart = echarts.init(document.getElementById('volumeChart'));
+        const spreadChart = echarts.init(document.getElementById('spreadChart'));
+
+        let appData = { market: {}, plate: {}, stock: {} };
+        let currentType = 'market', currentData = [], currentName = '', currentKey = '', currentMajor = '__all__', dataLoaded = false;
+        let globalCandidates = 70000;
+        let allSchoolLocations = [];
+
+        // 帮助弹窗控制
+        function openHelp() {
+            document.getElementById('helpOverlay').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+        function closeHelp() {
+            document.getElementById('helpOverlay').classList.remove('active');
+            document.body.style.overflow = '';
+        }
+        document.getElementById('helpOverlay').addEventListener('click', function(e) {
+            if (e.target === this) closeHelp();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeHelp();
+        });
+
+        // ==================== 聚合计算（修正最高/最低分逻辑） ====================
+function calcYearlyAggregate(majorsDict) {
+    const yearMap = {};
+    Object.values(majorsDict).forEach(records => {
+        records.forEach(r => {
+            if (!yearMap[r.year]) {
+                yearMap[r.year] = {
+                    totalWeight: 0,
+                    totalScore: 0,
+                    highRank: Infinity,      // 最高门槛专业的 lowRank（门槛最高的专业）
+                    lowRank: -Infinity,      // 所有 lowRank 中的最大值（全校最低分考生排名）
+                    maxLowScore: -Infinity,  // 最高专业的最低分（门槛最高的分数）
+                    minLowScore: Infinity,   // 最低专业的最低分（门槛最低的分数）
+                    maxHighScore: -Infinity, // 最高专业的最高分（天花板）
+                    volume: 0
+                };
+            }
+            const avgRank = (r.highRank + r.lowRank) / 2;
+            const w = r.volume || 1;
+            yearMap[r.year].totalWeight += w;
+            yearMap[r.year].totalScore += avgRank * w;
+            
+            // 记录全校最低位次（所有 lowRank 中的最大值）
+            if (r.lowRank !== undefined && !isNaN(r.lowRank)) {
+                yearMap[r.year].lowRank = Math.max(yearMap[r.year].lowRank, r.lowRank);
+            }
+            
+            // 找门槛最高的专业：lowScore 最大的专业
+            if (r.lowScore !== undefined && r.lowScore !== null && !isNaN(r.lowScore)) {
+                if (r.lowScore > yearMap[r.year].maxLowScore) {
+                    yearMap[r.year].maxLowScore = r.lowScore;
+                    yearMap[r.year].highRank = r.lowRank;  // 门槛最高专业的入门排名
+                }
+                // 记录最低专业的最低分（用于分差图）
+                if (r.lowScore < yearMap[r.year].minLowScore) {
+                    yearMap[r.year].minLowScore = r.lowScore;
+                }
+            }
+            // 记录天花板（最高专业的最高分）
+            if (r.highScore !== undefined && r.highScore !== null && !isNaN(r.highScore)) {
+                yearMap[r.year].maxHighScore = Math.max(yearMap[r.year].maxHighScore, r.highScore);
+            }
+            yearMap[r.year].volume += r.volume || 0;
+        });
+    });
+    
+    const result = [];
+    Object.keys(yearMap).forEach(year => {
+        const y = parseInt(year);
+        const info = yearMap[year];
+        const closeRank = info.totalWeight > 0 ? Number((info.totalScore / info.totalWeight).toFixed(2)) : 0;
+        // 如果找不到门槛最高的专业，用最低位次填充
+        if (info.highRank === Infinity) {
+            info.highRank = info.lowRank !== -Infinity ? info.lowRank : closeRank;
+        }
+        if (info.lowRank === -Infinity) {
+            info.lowRank = closeRank;
+        }
+        result.push({
+            year: y,
+            close: closeRank,
+            high: info.highRank,          // 最高门槛专业的入门排名
+            low: info.lowRank,            // 全校最低分考生排名
+            volume: info.volume,
+            maxScore: (info.maxLowScore !== -Infinity) ? info.maxLowScore : null,  // 最高专业的最低分
+            minScore: (info.minLowScore !== Infinity) ? info.minLowScore : null,   // 最低专业的最低分
+            maxHighScore: (info.maxHighScore !== -Infinity) ? info.maxHighScore : null
+        });
+    });
+    return result.sort((a,b) => a.year - b.year);
+}
+
+        function buildFullData(yearlyData) {
+            if (!yearlyData || yearlyData.length === 0) return [];
+            const sorted = yearlyData.sort((a,b) => a.year - b.year);
+            return sorted.map((item, i) => {
+                const open = i === 0 ? item.close : sorted[i-1].close;
+                return {
+                    year: item.year,
+                    open: open,
+                    close: item.close,
+                    high: item.high,
+                    low: item.low,
+                    volume: item.volume,
+                    maxScore: item.maxScore,
+                    minScore: item.minScore,
+                    maxHighScore: item.maxHighScore
+                };
+            });
+        }
+        function buildSchoolData(majorsDict) { return buildFullData(calcYearlyAggregate(majorsDict)); }
+
+        // ==================== 指数计算 ====================
+        function filterStockByLocation(location, year, plateKey) {
+            const res = [];
+            Object.keys(appData.stock).forEach(key => {
+                const item = appData.stock[key];
+                if (location && location !== 'all' && (item.schoolLocation || '') !== location) return;
+                if (plateKey && plateKey !== 'all' && (item.plate || '') !== plateKey) return;
+                const yd = item.data ? item.data.find(d => d.year === year) : null;
+                if (yd) res.push({ close: yd.close, volume: yd.volume });
+            });
+            return res;
+        }
+
+        function calcLocationIndex(location, year, plateKey) {
+            const arr = filterStockByLocation(location, year, plateKey);
+            if (arr.length === 0) return null;
+            let totalScoreW = 0, totalVol = 0;
+            arr.forEach(s => { totalScoreW += s.close * s.volume; totalVol += s.volume; });
+            const closeRank = totalVol > 0 ? Number((totalScoreW / totalVol).toFixed(2)) : 0;
+            const allClose = arr.map(i => i.close);
+            return { year, close: closeRank, volume: totalVol, high: Math.min(...allClose), low: Math.max(...allClose) };
+        }
+
+        function calcRegionIndex(regionKey, year, plateKey) {
+            const provinces = REGION_GROUP[regionKey];
+            const list = [];
+            provinces.forEach(p => {
+                const arr = filterStockByLocation(p, year, plateKey);
+                if (arr.length === 0) return;
+                let totalScoreW = 0, totalVol = 0;
+                arr.forEach(s => { totalScoreW += s.close * s.volume; totalVol += s.volume; });
+                const closeRank = totalVol > 0 ? Number((totalScoreW / totalVol).toFixed(2)) : 0;
+                const allClose = arr.map(i => i.close);
+                list.push({ year, close: closeRank, volume: totalVol, high: Math.min(...allClose), low: Math.max(...allClose) });
+            });
+            if (list.length === 0) return null;
+            let totalScoreW = 0, totalVol = 0;
+            list.forEach(i => { totalScoreW += i.close * i.volume; totalVol += i.volume; });
+            const closeRank = totalVol > 0 ? Number((totalScoreW / totalVol).toFixed(2)) : 0;
+            const allHigh = list.map(i => i.high), allLow = list.map(i => i.low);
+            return { year, close: closeRank, volume: totalVol, high: Math.min(...allHigh), low: Math.max(...allLow) };
+        }
+
+        function convertToPercentile(data, totalCandidates) {
+            if (!data || data.length === 0 || totalCandidates <= 0) return data;
+            return data.map(item => ({
+                year: item.year, open: (item.open / totalCandidates) * 100, close: (item.close / totalCandidates) * 100,
+                high: (item.high / totalCandidates) * 100, low: (item.low / totalCandidates) * 100,
+                volume: item.volume, maxScore: item.maxScore, minScore: item.minScore, maxHighScore: item.maxHighScore,
+                _rawOpen: item.open, _rawClose: item.close, _rawHigh: item.high, _rawLow: item.low
+            }));
+        }
+
+        function convertToHeatIndex(data) {
+            if (!data || data.length === 0) return data;
+            return data.map(item => ({
+                year: item.year,
+                open: 100 - item.open,
+                close: 100 - item.close,
+                high: 100 - item.high,
+                low: 100 - item.low,
+                volume: item.volume,
+                maxScore: item.maxScore,
+                minScore: item.minScore,
+                maxHighScore: item.maxHighScore,
+                _rawPercentile: item.close
+            }));
+        }
+
+        function refreshAllRegionIndex(silent) {
+            const totalCandidates = globalCandidates;
+            const regionKeys = Object.keys(REGION_GROUP);
+            const locationList = allSchoolLocations.length > 0 ? allSchoolLocations : [];
+
+            regionKeys.forEach(rk => {
+                const yearSet = new Set();
+                Object.values(appData.stock).forEach(item => { if (item.data) item.data.forEach(d => yearSet.add(d.year)); });
+                const years = Array.from(yearSet).sort((a,b) => a - b);
+                const raw = years.map(y => calcRegionIndex(rk, y, 'all')).filter(v => v);
+                const fullData = buildFullData(raw);
+                appData.market[rk] = { name: REGION_CN[rk], data: convertToPercentile(fullData, totalCandidates) };
+            });
+
+            const plateKeys = ['92','doublefirst','newresearch','s11','shuangfei'];
+            plateKeys.forEach(pk => {
+                regionKeys.forEach(rk => {
+                    const key = `${rk}_${pk}`;
+                    const yearSet = new Set();
+                    Object.values(appData.stock).forEach(item => { if (item.data) item.data.forEach(d => yearSet.add(d.year)); });
+                    const years = Array.from(yearSet).sort((a,b) => a - b);
+                    const raw = years.map(y => calcRegionIndex(rk, y, pk)).filter(v => v);
+                    const fullData = buildFullData(raw);
+                    const percentileData = convertToPercentile(fullData, totalCandidates);
+                    appData.plate[key] = { name: `${REGION_CN[rk]} ${PLATE_CN[pk]}`, data: convertToHeatIndex(percentileData) };
+                });
+            });
+
+            if (locationList.length > 0) {
+                plateKeys.forEach(pk => {
+                    locationList.forEach(loc => {
+                        const key = `loc_${loc}_${pk}`;
+                        const yearSet = new Set();
+                        Object.values(appData.stock).forEach(item => { if (item.data) item.data.forEach(d => yearSet.add(d.year)); });
+                        const years = Array.from(yearSet).sort((a,b) => a - b);
+                        const raw = years.map(y => calcLocationIndex(loc, y, pk)).filter(v => v);
+                        const fullData = buildFullData(raw);
+                        const percentileData = convertToPercentile(fullData, totalCandidates);
+                        appData.plate[key] = { name: `${loc}板块 ${PLATE_CN[pk]}`, data: convertToHeatIndex(percentileData) };
+                    });
+                });
+                locationList.forEach(loc => {
+                    const key = `loc_${loc}_all`;
+                    const yearSet = new Set();
+                    Object.values(appData.stock).forEach(item => { if (item.data) item.data.forEach(d => yearSet.add(d.year)); });
+                    const years = Array.from(yearSet).sort((a,b) => a - b);
+                    const raw = years.map(y => calcLocationIndex(loc, y, 'all')).filter(v => v);
+                    const fullData = buildFullData(raw);
+                    const percentileData = convertToPercentile(fullData, totalCandidates);
+                    appData.plate[key] = { name: `${loc}板块`, data: convertToHeatIndex(percentileData) };
+                });
+            }
+
+            if (!silent) { alert('大盘/板块指数已重新计算！'); loadCurrentData(); }
+        }
+
+        // ==================== 页面加载 ====================
+        function loadCurrentData() {
+            if (!dataLoaded) { document.getElementById('statusText').textContent = '⚠️ 请先加载数据文件夹'; return; }
+            const allData = appData;
+            if (currentType === 'market') {
+                currentKey = document.getElementById('marketSelect').value;
+                const item = allData.market[currentKey];
+                currentData = (item && item.data) ? [...item.data].sort((a,b) => a.year - b.year) : [];
+                currentName = (item && item.name) ? item.name : (REGION_CN[currentKey] + ' (无数据)');
+                renderDataList('market');
+                document.getElementById('major-select-group').style.display = 'none';
+            } else if (currentType === 'plate') {
+                const location = document.getElementById('plate-province').value;
+                const region = document.getElementById('plate-region').value;
+                const ptype = document.getElementById('plate-type').value;
+                let key;
+                if (location && location !== 'all') {
+                    key = `loc_${location}_${ptype}`;
+                    const item = allData.plate[key];
+                    currentData = (item && item.data) ? [...item.data].sort((a,b) => a.year - b.year) : [];
+                    currentName = (item && item.name) ? item.name : `${location}板块 ${PLATE_CN[ptype] || '全部'}`;
+                } else {
+                    key = `${region}_${ptype}`;
+                    const item = allData.plate[key];
+                    currentData = (item && item.data) ? [...item.data].sort((a,b) => a.year - b.year) : [];
+                    currentName = (item && item.name) ? item.name : `${REGION_CN[region]} ${PLATE_CN[ptype] || '全部'}`;
+                }
+                renderDataList('plate');
+                document.getElementById('major-select-group').style.display = 'none';
+            } else if (currentType === 'stock') {
+                const school = document.getElementById('stock-school').value.trim();
+                const province = document.getElementById('stock-province').value.trim();
+                if (!school || !province) {
+                    currentData = []; currentName = '请输入院校和招生省份'; currentKey = '';
+                    renderDataList('stock'); renderCurrent();
+                    document.getElementById('major-select-group').style.display = 'none';
+                    return;
+                }
+                currentKey = `${school}_${province}`;
+                const item = allData.stock[currentKey];
+                if (item) {
+                    updateMajorSelect(item);
+                    currentMajor = '__all__';
+                    if (item.data && item.data.length > 0) {
+                        currentData = [...item.data].sort((a,b) => a.year - b.year);
+                        currentName = item.name + ' (位次)';
+                    } else {
+                        const merged = buildSchoolData(item.majors || {});
+                        currentData = merged.length > 0 ? merged : [];
+                        currentName = merged.length > 0 ? (item.name + ' (位次)') : (item.name + ' (无数据)');
+                    }
+                } else {
+                    currentData = []; currentName = `${school}（${province}招生）`;
+                    document.getElementById('major-select-group').style.display = 'none';
+                }
+                renderDataList('stock');
+            }
+            renderCurrent();
+        }
+
+        function loadStockData() { loadCurrentData(); }
+
+        function updateMajorSelect(item) {
+            const group = document.getElementById('major-select-group');
+            const select = document.getElementById('majorSelect');
+            select.innerHTML = '<option value="__all__">全部专业（院校整体）</option>';
+            if (item && item.majors) {
+                Object.keys(item.majors).sort().forEach(m => { select.innerHTML += `<option value="${m}">${m}</option>`; });
+            }
+            select.value = currentMajor || '__all__';
+            group.style.display = 'block';
+        }
+
+        function onMajorChange() {
+            currentMajor = document.getElementById('majorSelect').value;
+            const item = appData.stock[currentKey];
+            if (!item) return;
+            if (currentMajor === '__all__') {
+                const merged = buildSchoolData(item.majors || {});
+                currentData = merged.length > 0 ? merged : (item.data || []);
+                currentName = item.name + ' (位次)';
+            } else {
+                const majorData = item.majors && item.majors[currentMajor];
+                if (majorData && majorData.length > 0) {
+                    const raw = majorData.map(r => ({ year: r.year, close: (r.highRank + r.lowRank) / 2, high: r.highRank, low: r.lowRank, maxScore: r.highScore, minScore: r.lowScore, volume: r.volume }));
+                    currentData = buildFullData(raw);
+                    currentName = item.name + ' · ' + currentMajor + ' (位次)';
+                } else {
+                    currentData = [];
+                    currentName = item.name + ' · ' + currentMajor + ' (无数据)';
+                }
+            }
+            renderCurrent();
+            renderDataList('stock');
+        }
+
+        // ==================== 增删改 ====================
+        function addMajorData() {
+            if (!dataLoaded) { alert('请先加载数据文件夹'); return; }
+            const school = document.getElementById('stock-school').value.trim();
+            const province = document.getElementById('stock-province').value.trim();
+            const major = document.getElementById('stock-major').value.trim();
+            const year = parseInt(document.getElementById('stock-year').value);
+            const highScore = parseFloat(document.getElementById('stock-highScore').value);
+            const lowScore = parseFloat(document.getElementById('stock-lowScore').value);
+            const highRank = parseInt(document.getElementById('stock-highRank').value);
+            const lowRank = parseInt(document.getElementById('stock-lowRank').value);
+            const volume = parseInt(document.getElementById('stock-volume').value) || 0;
+            if (!school || !province || !major || !year || isNaN(highRank) || isNaN(lowRank)) {
+                alert('请完整填写（年份、最高位次、最低位次）');
+                return;
+            }
+            const key = `${school}_${province}`;
+            if (!appData.stock[key]) {
+                const loc = prompt('请输入该学校所在地（如：浙江、北京、上海等）：', '');
+                if (!loc) { alert('必须填写学校所在地！'); return; }
+                appData.stock[key] = {
+                    name: `${school}（${province}招生）`,
+                    plate: document.getElementById('stock-plate').value,
+                    schoolLocation: loc,
+                    data: [],
+                    majors: {}
+                };
+                refreshLocationSelect();
+            }
+            const item = appData.stock[key];
+            if (!item.majors) item.majors = {};
+            if (!item.majors[major]) item.majors[major] = [];
+            const exist = item.majors[major].find(d => d.year === year);
+            const rec = { year, highScore, lowScore, highRank, lowRank, volume };
+            if (exist) Object.assign(exist, rec);
+            else item.majors[major].push(rec);
+            item.data = buildSchoolData(item.majors);
+            currentKey = key;
+            currentMajor = '__all__';
+            loadStockData();
+            ['stock-major','stock-year','stock-highScore','stock-lowScore','stock-highRank','stock-lowRank','stock-volume'].forEach(id => document.getElementById(id).value = '');
+            updateStatus(Object.keys(appData.stock).length, countRecords());
+        }
+
+        function addData(type) {
+            if (!dataLoaded) { alert('请先加载数据文件夹'); return; }
+            alert('手动添加大盘/板块数据暂不支持，请通过文件夹加载。');
+        }
+
+        function deleteData(type, year) {
+            if (!dataLoaded) { alert('请先加载数据文件夹'); return; }
+            if (!confirm(`确定删除 ${year} 年数据？`)) return;
+            if (type === 'stock') {
+                const item = appData.stock[currentKey];
+                if (!item) return;
+                if (currentMajor !== '__all__' && item.majors && item.majors[currentMajor]) {
+                    item.majors[currentMajor] = item.majors[currentMajor].filter(d => d.year !== year);
+                    item.data = buildSchoolData(item.majors);
+                    loadStockDataForMajor();
+                } else {
+                    if (item.majors) {
+                        Object.keys(item.majors).forEach(m => {
+                            item.majors[m] = item.majors[m].filter(d => d.year !== year);
+                        });
+                    }
+                    item.data = buildSchoolData(item.majors);
+                    loadStockData();
+                }
+                updateStatus(Object.keys(appData.stock).length, countRecords());
+            } else {
+                alert('大盘/板块数据无法直接删除，请从源文件移除后重新加载。');
+            }
+        }
+
+        function loadStockDataForMajor() { onMajorChange(); }
+
+        function countRecords() {
+            let total = 0;
+            Object.values(appData.stock).forEach(item => { if (item.data) total += item.data.length; });
+            return total;
+        }
+
+        function renderDataList(type) {
+            const listEl = document.getElementById(`${type}-data-list`);
+            if (!currentData || currentData.length === 0) {
+                listEl.innerHTML = '<div style="padding:15px;text-align:center;color:#666;font-size:12px;">暂无数据</div>';
+                return;
+            }
+            const sorted = [...currentData].sort((a,b) => b.year - a.year);
+            listEl.innerHTML = sorted.map(item => {
+                const isUp = item.close >= item.open;
+                const color = isUp ? 'up' : 'down';
+                return `<div class="data-item"><span>${item.year}年 | <span class="${color}">${item.close.toFixed(2)}</span></span><span class="del-btn" onclick="deleteData('${type}', ${item.year})">删除</span></div>`;
+            }).join('');
+        }
+
+        function calculateMA(data, dayCount) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < dayCount - 1) { result.push('-'); continue; }
+                let sum = 0;
+                for (let j = 0; j < dayCount; j++) sum += data[i - j].close;
+                result.push(+(sum / dayCount).toFixed(2));
+            }
+            return result;
+        }
+
+        // ==================== 渲染三图联动 ====================
+ function renderCurrent() {
+    if (!currentData || !Array.isArray(currentData) || currentData.length === 0) {
+        [klineChart, volumeChart, spreadChart].forEach(chart => chart.clear());
+        document.getElementById('currentName').textContent = currentName || '-';
+        document.getElementById('currentPrice').textContent = '-';
+        document.getElementById('changeRate').textContent = '-';
+        document.getElementById('currentVolume').textContent = '-';
+        document.getElementById('historyHigh').textContent = '-';
+        document.getElementById('historyLow').textContent = '-';
+        return;
+    }
+
+    const validData = currentData.filter(item =>
+        item && typeof item === 'object' &&
+        item.year !== undefined &&
+        item.close !== undefined &&
+        item.open !== undefined &&
+        item.high !== undefined &&
+        item.low !== undefined
+    );
+
+    if (validData.length === 0) {
+        [klineChart, volumeChart, spreadChart].forEach(chart => chart.clear());
+        document.getElementById('currentName').textContent = currentName || '无有效数据';
+        document.getElementById('currentPrice').textContent = '-';
+        document.getElementById('changeRate').textContent = '-';
+        document.getElementById('currentVolume').textContent = '-';
+        document.getElementById('historyHigh').textContent = '-';
+        document.getElementById('historyLow').textContent = '-';
+        return;
+    }
+
+    const data = validData.sort((a,b) => a.year - b.year);
+    const dates = data.map(d => d.year + '年');
+    const values = data.map(d => [d.open, d.close, d.low, d.high]);
+    const volumes = data.map(d => d.volume || 0);
+
+    // 成交量颜色：按同比变化（增加红，减少绿）
+    const volColors = data.map((d, i) => {
+        if (i === 0) return '#666';
+        const prev = data[i-1].volume;
+        return d.volume > prev ? upColor : (d.volume < prev ? downColor : '#666');
+    });
+
+    const ma1 = parseInt(document.getElementById('ma1')?.value) || 5;
+    const ma2 = parseInt(document.getElementById('ma2')?.value) || 10;
+    const ma3 = parseInt(document.getElementById('ma3')?.value) || 20;
+    const ma4 = parseInt(document.getElementById('ma4')?.value) || 30;
+
+    const latest = data[data.length - 1];
+    const prev = data[data.length - 2];
+    const allHighs = data.map(d => d.high);
+    const allLows = data.map(d => d.low);
+
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+
+    setText('currentName', currentName || '');
+    setText('currentPrice', latest.close.toFixed(2));
+    setText('currentVolume', latest.volume.toLocaleString() + '人');
+    setText('historyHigh', Math.min(...allHighs).toFixed(2));
+    setText('historyLow', Math.max(...allLows).toFixed(2));
+
+    const priceEl = document.getElementById('currentPrice');
+    const changeEl = document.getElementById('changeRate');
+    if (prev) {
+        const change = ((latest.close - prev.close) / prev.close * 100).toFixed(2);
+        const isUp = latest.close >= prev.close;
+        if (changeEl) {
+            changeEl.textContent = (isUp ? '+' : '') + change + '%';
+            changeEl.className = 'value ' + (isUp ? 'up' : 'down');
+        }
+        if (priceEl) priceEl.className = 'value ' + (isUp ? 'up' : 'down');
+    } else {
+        if (changeEl) changeEl.textContent = '-';
+        if (priceEl) priceEl.className = 'value';
+    }
+
+    // K线
+    klineChart.setOption({
+        backgroundColor: 'transparent', animation: false,
+        legend: { top: 5, left: 'center', data: ['K线', `MA${ma1}`, `MA${ma2}`, `MA${ma3}`, `MA${ma4}`], textStyle: { color: '#aaa', fontSize: 11 }, itemWidth: 14, itemHeight: 8 },
+        tooltip: {
+            trigger: 'axis', axisPointer: { type: 'cross' },
+            backgroundColor: 'rgba(22,33,62,0.95)', borderColor: '#0f3460',
+            textStyle: { color: '#fff', fontSize: 12 },
+            formatter: function(params) {
+                const idx = params[0].dataIndex;
+                const item = data[idx];
+                if (!item) return '';
+                let html = `<b>${item.year}年</b><br/>开盘: ${item.open.toFixed(2)}<br/>收盘: ${item.close.toFixed(2)}<br/>最高位次(靠前): ${item.high.toFixed(2)}<br/>最低位次(靠后): ${item.low.toFixed(2)}<br/>招生: ${item.volume.toLocaleString()}人`;
+                // 显示学校最高分（最高专业的最高分）和最低分（最低专业的最低分）
+                if (item.maxHighScore !== undefined && item.maxHighScore !== null) {
+                    html += `<br/>学校最高分(天花板): ${item.maxHighScore}`;
+                }
+                if (item.minScore !== undefined && item.minScore !== null) {
+                    html += `<br/>学校最低分(地板): ${item.minScore}`;
+                }
+                // 额外显示最高专业的最低分（门槛）供参考
+                if (item.maxScore !== undefined && item.maxScore !== null) {
+                    html += `<br/>最高专业最低分(门槛): ${item.maxScore}`;
+                }
+                if (item._rawPercentile !== undefined) {
+                    html += `<br/><i>原始百分位数: ${item._rawPercentile.toFixed(2)}%</i>`;
+                }
+                return html;
+            }
+        },
+        axisPointer: { link: [{ xAxisIndex: 'all' }], label: { backgroundColor: '#777' } },
+        grid: [{ left: 60, right: 30, top: 40, height: '65%' }],
+        xAxis: { type: 'category', data: dates, boundaryGap: true, axisLine: { lineStyle: { color: '#0f3460' } }, axisLabel: { color: '#aaa', fontSize: 11 }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax', axisPointer: { z: 100 } },
+        yAxis: { scale: true, splitArea: { show: true, areaStyle: { color: ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.05)'] } }, axisLine: { lineStyle: { color: '#0f3460' } }, axisLabel: { color: '#aaa', fontSize: 11 }, splitLine: { lineStyle: { color: '#0f3460', type: 'dashed' } } },
+        dataZoom: [
+            { type: 'inside', xAxisIndex: [0, 1, 2], start: 0, end: 100 },
+            { show: true, type: 'slider', xAxisIndex: [0, 1, 2], bottom: 5, height: 20, borderColor: '#0f3460', fillerColor: 'rgba(236,0,0,0.15)', handleStyle: { color: '#ec0000' }, textStyle: { color: '#aaa' } }
+        ],
+        series: [
+            { name: 'K线', type: 'candlestick', data: values, itemStyle: { color: upColor, color0: downColor, borderColor: upBorderColor, borderColor0: downBorderColor },
+                markPoint: { symbol: 'pin', symbolSize: 40, label: { fontSize: 10, color: '#fff', formatter: p => p.value.toFixed(0) }, data: [
+                    { name: '历史最高位次', type: 'min', valueDim: 'highest', itemStyle: { color: upColor } },
+                    { name: '历史最低位次', type: 'max', valueDim: 'lowest', itemStyle: { color: downColor } }
+                ]}
+            },
+            { name: `MA${ma1}`, type: 'line', data: calculateMA(data, ma1), smooth: true, lineStyle: { width: 1, color: '#f39c12' }, itemStyle: { color: '#f39c12' }, symbol: 'none' },
+            { name: `MA${ma2}`, type: 'line', data: calculateMA(data, ma2), smooth: true, lineStyle: { width: 1, color: '#9b59b6' }, itemStyle: { color: '#9b59b6' }, symbol: 'none' },
+            { name: `MA${ma3}`, type: 'line', data: calculateMA(data, ma3), smooth: true, lineStyle: { width: 1, color: '#3498db' }, itemStyle: { color: '#3498db' }, symbol: 'none' },
+            { name: `MA${ma4}`, type: 'line', data: calculateMA(data, ma4), smooth: true, lineStyle: { width: 1, color: '#1abc9c' }, itemStyle: { color: '#1abc9c' }, symbol: 'none' }
+        ]
+    }, true);
+
+    // 成交量
+    volumeChart.setOption({
+        backgroundColor: 'transparent', animation: false,
+        tooltip: { trigger: 'axis', formatter: function(params) {
+            const idx = params[0].dataIndex;
+            const item = data[idx];
+            if (!item) return '';
+            const prevVol = idx > 0 ? data[idx-1].volume : item.volume;
+            const change = item.volume - prevVol;
+            return `${item.year}年<br/>招生人数: ${item.volume.toLocaleString()}人<br/>变化: ${change > 0 ? '+' : ''}${change}人`;
+        }},
+        grid: { left: 60, right: 30, top: 5, bottom: 35, height: 80 },
+        xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: '#0f3460' } }, axisLabel: { show: false }, axisTick: { show: false } },
+        yAxis: { axisLine: { lineStyle: { color: '#0f3460' } }, axisLabel: { color: '#aaa', fontSize: 10 }, splitLine: { lineStyle: { color: '#0f3460', type: 'dashed' } } },
+        dataZoom: [
+            { type: 'inside', xAxisIndex: [0, 1, 2], start: 0, end: 100 },
+            { show: true, type: 'slider', xAxisIndex: [0, 1, 2], bottom: 5, height: 20, borderColor: '#0f3460', fillerColor: 'rgba(236,0,0,0.15)', handleStyle: { color: '#ec0000' }, textStyle: { color: '#aaa' } }
+        ],
+        series: [{ name: '招生人数', type: 'bar', data: volumes.map((v, i) => ({ value: v, itemStyle: { color: volColors[i] } })) }]
+    }, true);
+
+    // 分差柱（最高专业最低分 - 最低专业最低分）
+    const spreadData = data.filter(item => item.maxScore !== undefined && item.maxScore !== null && !isNaN(item.maxScore) && item.minScore !== undefined && item.minScore !== null && !isNaN(item.minScore));
+    if (spreadData.length > 0) {
+        const years = spreadData.map(d => d.year + '年');
+        const lowValues = spreadData.map(d => d.minScore);
+        const diffValues = spreadData.map(d => Number((d.maxScore - d.minScore).toFixed(1)));
+
+        // 分差颜色：按同比变化（扩大红，缩小绿）
+        const diffColors = spreadData.map((d, i) => {
+            if (i === 0) return '#666';
+            const prevDiff = Number((spreadData[i-1].maxScore - spreadData[i-1].minScore).toFixed(1));
+            return diffValues[i] > prevDiff ? upColor : (diffValues[i] < prevDiff ? downColor : '#666');
+        });
+
+        const allLow = spreadData.map(d => d.minScore);
+        const allHigh = spreadData.map(d => d.maxScore);
+        const minVal = Math.min(...allLow) - 10;
+        const maxVal = Math.max(...allHigh) + 10;
+
+        spreadChart.setOption({
+            backgroundColor: 'transparent',
+            animation: false,
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                formatter: function(params) {
+                    const idx = params[0].dataIndex;
+                    const item = spreadData[idx];
+                    return `<b>${item.year}年</b><br/>最高专业最低分：${item.maxScore}<br/>最低专业最低分：${item.minScore}<br/>分差：${diffValues[idx]}分`;
+                }
+            },
+            grid: { left: 60, right: 30, top: 5, bottom: 35, height: 80 },
+            xAxis: {
+                type: 'category',
+                data: years,
+                axisLine: { lineStyle: { color: '#0f3460' } },
+                axisLabel: { show: false },
+                axisTick: { show: false }
+            },
+            yAxis: {
+                name: '分数',
+                nameTextStyle: { color: "#aaa", fontSize: 11 },
+                min: minVal,
+                max: maxVal,
+                axisLine: { lineStyle: { color: '#0f3460' } },
+                axisLabel: { color: '#aaa', fontSize: 10 },
+                splitLine: { lineStyle: { color: '#0f3460', type: 'dashed' } }
+            },
+            dataZoom: [
+                { type: 'inside', xAxisIndex: [0, 1, 2], start: 0, end: 100 },
+                { show: true, type: 'slider', xAxisIndex: [0, 1, 2], bottom: 5, height: 20, borderColor: '#0f3460', fillerColor: 'rgba(236,0,0,0.15)', handleStyle: { color: '#ec0000' }, textStyle: { color: '#aaa' } }
+            ],
+            series: [
+                {
+                    name: '占位',
+                    type: 'bar',
+                    stack: '分差',
+                    silent: true,
+                    itemStyle: { color: 'transparent', borderColor: 'transparent' },
+                    emphasis: { itemStyle: { color: 'transparent', borderColor: 'transparent' } },
+                    data: lowValues
+                },
+                {
+                    name: '分差区间',
+                    type: 'bar',
+                    stack: '分差',
+                    data: diffValues,
+                    itemStyle: {
+                        color: function(params) {
+                            return diffColors[params.dataIndex];
+                        },
+                        borderRadius: [2, 2, 0, 0]
+                    },
+                    label: {
+                        show: true,
+                        position: 'top',
+                        formatter: function(params) {
+                            return diffValues[params.dataIndex] + '分';
+                        },
+                        color: '#aaa',
+                        fontSize: 10
+                    }
+                }
+            ]
+        }, true);
+    } else {
+        spreadChart.clear();
+    }
+
+    // 三图联动缩放
+    const zoomHandler = function(params) {
+        const start = params.batch ? params.batch[0].start : params.start;
+        const end = params.batch ? params.batch[0].end : params.end;
+        [volumeChart, spreadChart].forEach(chart => chart.dispatchAction({ type: 'dataZoom', start, end }));
+    };
+    klineChart.off('dataZoom');
+    klineChart.on('dataZoom', zoomHandler);
+}
+        // ==================== 导出 ====================
+        function showExportModal() {
+            if (!currentKey || !appData.stock[currentKey]) { alert('请先加载个股'); return; }
+            document.getElementById('exportModal').classList.add('active');
+        }
+        function closeExportModal() { document.getElementById('exportModal').classList.remove('active'); }
+        function exportStockData() {
+            const format = document.getElementById('exportFormat').value;
+            const item = appData.stock[currentKey];
+            if (!item) { alert('无数据'); closeExportModal(); return; }
+            let rows = [], header = [];
+            const schoolName = item.name.replace(/（.*）/, '');
+            if (format === 'vertical') {
+                header = ['院校名称', '专业名称', '年份', '最高分', '最低分', '最高位次', '最低位次', '录取人数'];
+                const majors = item.majors || {};
+                if (Object.keys(majors).length === 0) { alert('该院校无专业数据'); closeExportModal(); return; }
+                Object.keys(majors).forEach(major => {
+                    majors[major].forEach(rec => {
+                        rows.push([schoolName, major, rec.year, rec.highScore || '', rec.lowScore || '', rec.highRank, rec.lowRank, rec.volume || 0]);
+                    });
+                });
+                rows.sort((a,b) => a[1].localeCompare(b[1]) || a[2] - b[2]);
+            } else {
+                if (!item.data || item.data.length === 0) { alert('无整体数据'); closeExportModal(); return; }
+                const sorted = [...item.data].sort((a,b) => a.year - b.year);
+                const years = sorted.map(d => d.year);
+                header = ['院校名称', ...years.map(y => y + '年位次')];
+                rows.push([schoolName, ...sorted.map(d => d.close.toFixed(2))]);
+            }
+            const wsData = [header, ...rows];
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+            XLSX.writeFile(wb, `${schoolName}_${format === 'vertical' ? '专业' : '整体'}.xlsx`);
+            closeExportModal();
+            alert('导出成功！');
+        }
+        function exportAllData() {
+            if (!dataLoaded || Object.keys(appData.stock).length === 0) { alert('没有数据可导出'); return; }
+            alert('批量导出功能：请切换到个股页面，逐个院校导出。');
+        }
+
+        // ==================== 加载文件夹（支持多次累加） ====================
+        window.loadFolder = function(event) {
+            const files = event.target.files;
+            if (!files || files.length === 0) return;
+
+            // 如果尚未初始化，则初始化；否则追加数据
+            if (!dataLoaded) {
+                appData = { market: {}, plate: {}, stock: {} };
+                allSchoolLocations = [];
+            }
+
+            const promises = [];
+            let firstCandidates = null;
+            const locationSet = new Set();
+
+            // 收集已有的学校所在地，用于后续合并
+            Object.values(appData.stock).forEach(item => {
+                if (item.schoolLocation && item.schoolLocation !== '未知' && item.schoolLocation !== '待定') {
+                    locationSet.add(item.schoolLocation);
+                }
+            });
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                if (!file.name.match(/\.(xlsx|xls)$/i)) continue;
+                const p = new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const data = new Uint8Array(e.target.result);
+                            const workbook = XLSX.read(data, { type: 'array' });
+                            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                            const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+                            resolve({ file, jsonData });
+                        } catch (err) { reject(err); }
+                    };
+                    reader.onerror = reject;
+                    reader.readAsArrayBuffer(file);
+                });
+                promises.push(p);
+            }
+
+            Promise.all(promises).then(results => {
+                let totalSchools = 0, totalRecords = 0;
+                results.forEach(({ file, jsonData }) => {
+                    if (jsonData.length < 2) return;
+                    // 获取文件夹名作为学校所在地
+                    const pathParts = file.webkitRelativePath ? file.webkitRelativePath.split('/') : [];
+                    let schoolLocation = '未知';
+                    if (pathParts.length > 1) {
+                        schoolLocation = pathParts[0];
+                    }
+                    if (schoolLocation === '未知' || schoolLocation === '') schoolLocation = '待定';
+
+                    // 解析文件名：年份 招生省份 院校 板块 [考生数]
+                    const nameWithoutExt = file.name.replace(/\.[^.]+$/, '');
+                    const parts = nameWithoutExt.trim().split(/\s+/);
+                    if (parts.length < 4) {
+                        console.warn('文件名格式错误（需要 年份 招生省份 院校 板块 [考生数]）：', file.name);
+                        return;
+                    }
+                    const fileYear = parseInt(parts[0]);
+                    if (isNaN(fileYear) || fileYear < 2000) { console.warn('年份无效：', parts[0]); return; }
+                    let admissionProvince = parts[1];
+                    // 板块识别：先判断最后一部分是否为数字（考生数）
+                    let plate = parts[parts.length - 1];
+                    let school = parts.slice(2, parts.length - 1).join(' ');
+                    let candidates = null;
+                    const lastPart = parts[parts.length - 1];
+                    if (!isNaN(parseInt(lastPart)) && lastPart.length > 3) {
+                        candidates = parseInt(lastPart);
+                        plate = parts[parts.length - 2];
+                        school = parts.slice(2, parts.length - 2).join(' ');
+                    }
+                    if (!admissionProvince || !school) { console.warn('招生省份或院校名称为空'); return; }
+                    locationSet.add(schoolLocation);
+
+                    if (firstCandidates === null && candidates !== null) {
+                        firstCandidates = candidates;
+                        globalCandidates = candidates;
+                    }
+                    const plateMap = { '92':'92', 'doublefirst':'doublefirst', 'newresearch':'newresearch', 's11':'s11', 'shuangfei':'shuangfei' };
+                    const plateKey = plateMap[plate.toLowerCase()] || 'shuangfei';
+
+                    const header = jsonData[0];
+                    const colMap = { major: -1, highScore: -1, lowScore: -1, highRank: -1, lowRank: -1, volume: -1 };
+                    header.forEach((h, idx) => {
+                        const str = String(h).trim();
+                        if (str.includes('专业')) colMap.major = idx;
+                        else if (str.includes('最高分')) colMap.highScore = idx;
+                        else if (str.includes('最低分')) colMap.lowScore = idx;
+                        else if (str.includes('最高位次') || str.includes('最高排名')) colMap.highRank = idx;
+                        else if (str.includes('最低位次') || str.includes('最低排名')) colMap.lowRank = idx;
+                        else if (str.includes('人数') || str.includes('录取')) colMap.volume = idx;
+                    });
+                    if (colMap.major === -1 || colMap.highRank === -1 || colMap.lowRank === -1) {
+                        console.warn('列匹配失败，需要 专业名称、最高位次、最低位次', file.name);
+                        return;
+                    }
+
+                    const key = `${school}_${admissionProvince}`;
+                    if (!appData.stock[key]) {
+                        appData.stock[key] = {
+                            name: `${school}（${admissionProvince}招生）`,
+                            plate: plateKey,
+                            schoolLocation: schoolLocation,
+                            data: [],
+                            majors: {}
+                        };
+                    } else {
+                        // 如果已存在，更新学校所在地（若之前未知）
+                        const existing = appData.stock[key];
+                        if (existing.schoolLocation === '未知' || existing.schoolLocation === '待定') {
+                            existing.schoolLocation = schoolLocation;
+                        }
+                    }
+                    const item = appData.stock[key];
+
+                    for (let row = 1; row < jsonData.length; row++) {
+                        const rowData = jsonData[row];
+                        if (!rowData || rowData.length === 0) continue;
+                        const hasData = rowData.some(cell => cell !== undefined && cell !== null && cell !== '');
+                        if (!hasData) continue;
+
+                        const majorName = rowData[colMap.major]?.toString().trim();
+                        if (!majorName) continue;
+
+                        const highScore = colMap.highScore !== -1 ? parseFloat(rowData[colMap.highScore]) : NaN;
+                        const lowScore = colMap.lowScore !== -1 ? parseFloat(rowData[colMap.lowScore]) : NaN;
+                        const highRank = parseInt(rowData[colMap.highRank]);
+                        const lowRank = parseInt(rowData[colMap.lowRank]);
+                        const volume = colMap.volume !== -1 ? (parseInt(rowData[colMap.volume]) || 0) : 0;
+
+                        if (isNaN(highRank) || isNaN(lowRank)) continue;
+
+                        if (!item.majors[majorName]) item.majors[majorName] = [];
+                        const exist = item.majors[majorName].find(r => r.year === fileYear);
+                        const rec = {
+                            year: fileYear,
+                            highScore: isNaN(highScore) ? null : highScore,
+                            lowScore: isNaN(lowScore) ? null : lowScore,
+                            highRank: highRank,
+                            lowRank: lowRank,
+                            volume: volume
+                        };
+                        if (exist) Object.assign(exist, rec);
+                        else item.majors[majorName].push(rec);
+                        totalRecords++;
+                    }
+                    item.data = buildSchoolData(item.majors);
+                    totalSchools++;
+                });
+
+                // 更新学校所在地下拉列表
+                allSchoolLocations = Array.from(locationSet).filter(loc => loc !== '未知' && loc !== '待定').sort();
+                if (allSchoolLocations.length === 0) allSchoolLocations = ['待定'];
+                const provSelect = document.getElementById('plate-province');
+                provSelect.innerHTML = '<option value="all">全部省份</option>';
+                allSchoolLocations.forEach(loc => {
+                    provSelect.innerHTML += `<option value="${loc}">${loc}板块</option>`;
+                });
+
+                if (firstCandidates === null) { globalCandidates = 70000; document.getElementById('statusText').textContent = '⚠️ 未读取到考生数，使用默认值 70000'; }
+                else { document.getElementById('statusText').textContent = `✅ 考生数: ${globalCandidates.toLocaleString()}`; }
+
+                dataLoaded = true;
+                refreshAllRegionIndex(true);
+                loadCurrentData();
+                updateStatus(totalSchools, totalRecords);
+                alert(`加载完成！\n院校：${totalSchools} 所\n记录：${totalRecords} 条\n学校所在地：${allSchoolLocations.join('、')}\n考生数：${globalCandidates.toLocaleString()}`);
+            }).catch(err => {
+                console.error('读取Excel失败', err);
+                alert('部分文件解析出错，请检查Excel格式、文件名规范');
+            });
+        };
+
+        // ==================== 刷新所在地下拉 ====================
+        function refreshLocationSelect() {
+            const locSet = new Set();
+            Object.values(appData.stock).forEach(item => {
+                if (item.schoolLocation && item.schoolLocation !== '未知' && item.schoolLocation !== '待定') {
+                    locSet.add(item.schoolLocation);
+                }
+            });
+            allSchoolLocations = Array.from(locSet).sort();
+            const provSelect = document.getElementById('plate-province');
+            provSelect.innerHTML = '<option value="all">全部省份</option>';
+            allSchoolLocations.forEach(loc => {
+                provSelect.innerHTML += `<option value="${loc}">${loc}板块</option>`;
+            });
+        }
+
+        // ==================== 状态更新 ====================
+        function updateStatus(schoolNum, recNum) {
+            document.getElementById('statusCount').textContent = `院校：${schoolNum || 0} | 记录：${recNum || 0} | 总考生：${globalCandidates.toLocaleString()}`;
+        }
+
+        // ==================== 初始化 ====================
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                const tabName = this.dataset.tab;
+                if (tabName === 'help') {
+                    openHelp();
+                    return;
+                }
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                this.classList.add('active');
+                currentType = tabName;
+                document.getElementById(`${currentType}-content`).classList.add('active');
+                loadCurrentData();
+            });
+        });
+        document.getElementById('marketSelect').addEventListener('change', loadCurrentData);
+        document.getElementById('plate-province').addEventListener('change', loadCurrentData);
+        document.getElementById('plate-region').addEventListener('change', loadCurrentData);
+        document.getElementById('plate-type').addEventListener('change', loadCurrentData);
+
+        window.addEventListener('resize', () => { klineChart.resize(); volumeChart.resize(); spreadChart.resize(); });
+
+        // 启动
+        dataLoaded = false;
+        loadCurrentData();
+        document.getElementById('statusText').textContent = '请点击「加载文件夹」导入 Excel 数据';
+    </script>
+</body>
+</html>
