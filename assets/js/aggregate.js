@@ -38,6 +38,7 @@ export function yearlyAggregate(majors) {
           maxLowScore: null,
           minLowScore: null,
           maxHighScore: null,
+          lowScores: [],
         };
         byYear.set(year, acc);
       }
@@ -56,6 +57,7 @@ export function yearlyAggregate(majors) {
       if (Number.isFinite(record.lowScore)) {
         acc.maxLowScore = acc.maxLowScore === null ? record.lowScore : Math.max(acc.maxLowScore, record.lowScore);
         acc.minLowScore = acc.minLowScore === null ? record.lowScore : Math.min(acc.minLowScore, record.lowScore);
+        acc.lowScores.push(record.lowScore);
       }
       if (Number.isFinite(record.highScore)) {
         acc.maxHighScore = acc.maxHighScore === null ? record.highScore : Math.max(acc.maxHighScore, record.highScore);
@@ -69,6 +71,13 @@ export function yearlyAggregate(majors) {
       const close = acc.weight > 0 ? round2(acc.sumWeightedRank / acc.weight) : 0;
       const best = Number.isFinite(acc.best) ? acc.best : close;
       const worst = Number.isFinite(acc.worst) ? acc.worst : close;
+
+      // 稳健分差：用 P10–P90 代替 max−min，避免"专业数量多则极差大"的可比性问题
+      const sortedScores = [...acc.lowScores].sort((a, b) => a - b);
+      const p10 = quantile(sortedScores, 0.1);
+      const p90 = quantile(sortedScores, 0.9);
+      const spread = p10 !== null && p90 !== null ? round2(p90 - p10) : null;
+
       return {
         year,
         close,
@@ -78,8 +87,27 @@ export function yearlyAggregate(majors) {
         maxScore: acc.maxLowScore,
         minScore: acc.minLowScore,
         maxHighScore: acc.maxHighScore,
+        p10Score: p10,
+        p90Score: p90,
+        spread,
+        // 录取率估计 ≈ 招生人数 / 位次：同时控制扩招缩招与考生规模
+        difficulty: close > 0 ? round2((acc.volume / close) * 100) : null,
       };
     });
+}
+
+/**
+ * 线性插值分位数（与 Excel 的 PERCENTILE.INC 同口径）。
+ * @param {number[]} sorted 已升序排列
+ */
+export function quantile(sorted, q) {
+  if (!sorted || sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sorted[base + 1] === undefined) return sorted[base];
+  return round2(sorted[base] + rest * (sorted[base + 1] - sorted[base]));
 }
 
 /**
@@ -129,8 +157,49 @@ export function toCandles(series) {
       percentile: item.percentile ?? null,
       percentileEstimated: Boolean(item.percentileEstimated),
       candidates: item.candidates ?? null,
+      p10Score: item.p10Score ?? null,
+      p90Score: item.p90Score ?? null,
+      spread: item.spread ?? null,
+      difficulty: item.difficulty ?? null,
+      lowSample: (item.volume ?? 0) > 0 && (item.volume ?? 0) < 20,
     };
   });
+}
+
+/**
+ * 断档 / 异常年份检测（稳健方法）。
+ *
+ * 用同比变化率的中位数做中心、MAD 做尺度：
+ *   MAD = median(|x - median(x)|)，标准化尺度 1.4826 × MAD
+ *   |x - median| > max(3 × 1.4826 × MAD, 20%) 视为异常
+ *
+ * 之所以不用均值±3σ：均值与标准差本身会被那个异常值拽走（掩蔽效应）。
+ * @param {Array<{year:number, close:number}>} candles
+ * @returns {{flagged:Set<number>, changes:Array<{year:number, change:number, z:number}>}}
+ */
+export function detectOutliers(candles) {
+  const changes = [];
+  for (let i = 1; i < (candles?.length ?? 0); i += 1) {
+    const prev = candles[i - 1].close;
+    if (!prev) continue;
+    changes.push({ year: candles[i].year, change: (candles[i].close - prev) / prev });
+  }
+
+  const flagged = new Set();
+  if (changes.length < 3) return { flagged, changes };
+
+  const sorted = changes.map((c) => c.change).sort((a, b) => a - b);
+  const median = quantile(sorted, 0.5);
+  const deviations = changes.map((c) => Math.abs(c.change - median)).sort((a, b) => a - b);
+  const mad = quantile(deviations, 0.5);
+  const scale = 1.4826 * mad;
+  const threshold = Math.max(3 * scale, 0.2); // 至少 20% 的同比跳动才算异常
+
+  for (const item of changes) {
+    item.z = scale > 0 ? round2(Math.abs(item.change - median) / scale) : null;
+    if (Math.abs(item.change - median) > threshold) flagged.add(item.year);
+  }
+  return { flagged, changes };
 }
 
 /**
@@ -144,16 +213,24 @@ export function buildSchoolSeries(majors, candidatesByYear = {}) {
 
 /** 单个专业 → K 线 */
 export function buildMajorSeries(records, candidatesByYear = {}) {
-  const yearly = sortByYear(records ?? []).map((record) => ({
-    year: record.year,
-    close: round2((record.highRank + record.lowRank) / 2),
-    best: record.highRank,
-    worst: record.lowRank,
-    volume: record.volume ?? 0,
-    maxScore: record.lowScore ?? null,
-    minScore: record.lowScore ?? null,
-    maxHighScore: record.highScore ?? null,
-  }));
+  const yearly = sortByYear(records ?? []).map((record) => {
+    const close = round2((record.highRank + record.lowRank) / 2);
+    return {
+      year: record.year,
+      close,
+      best: record.highRank,
+      worst: record.lowRank,
+      volume: record.volume ?? 0,
+      maxScore: record.lowScore ?? null,
+      minScore: record.lowScore ?? null,
+      maxHighScore: record.highScore ?? null,
+      // 单专业没有"校内分差"可言
+      spread: null,
+      p10Score: null,
+      p90Score: null,
+      difficulty: close > 0 ? round2(((record.volume ?? 0) / close) * 100) : null,
+    };
+  });
   return toCandles(attachPercentiles(yearly, candidatesByYear));
 }
 

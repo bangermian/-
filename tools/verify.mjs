@@ -5,7 +5,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { attachPercentiles, movingAverage, toCandles, yearlyAggregate } from '../assets/js/aggregate.js';
+import {
+  attachPercentiles, detectOutliers, movingAverage, quantile, toCandles, yearlyAggregate,
+} from '../assets/js/aggregate.js';
 import { computeIndices } from '../assets/js/indices.js';
 import {
   normalizePlate, parseAggregateRows, parseCandidatesRows, parseFileName, parseSheetRows,
@@ -225,6 +227,13 @@ test('没有百分位的院校不进入指数', () => {
   assert.equal(market.east.data[0].schools, 2);
 });
 
+test('基准线：同省同板块的平均百分位', () => {
+  const { benchmarks } = computeIndices(fixtureState());
+  assert.equal(benchmarks['天津|doublefirst'][0].percentile, 14.29);
+  assert.equal(benchmarks['天津|s11'][0].percentile, 28.57);
+  assert.equal(benchmarks['浙江|s11'][0].percentile, 60);
+});
+
 /* ------------------------------ 状态 ------------------------------ */
 
 function record(overrides = {}) {
@@ -314,6 +323,57 @@ test('缓存序列化后可完整还原（含考生数）', () => {
 test('版本不一致的缓存会被丢弃', () => {
   assert.equal(deserialize('{"schemaVersion":1,"schools":{}}'), null);
   assert.equal(deserialize('not json'), null);
+});
+
+/* ------------------------------ 稳健分差 / 录取率 / 断档 ------------------------------ */
+
+test('分位数用线性插值（与 Excel PERCENTILE.INC 同口径）', () => {
+  const sorted = [590, 600, 610, 620, 700];
+  assert.equal(quantile(sorted, 0.1), 594);   // 590 + 0.4×10
+  assert.equal(quantile(sorted, 0.9), 668);   // 620 + 0.6×80
+  assert.equal(quantile([], 0.5), null);
+  assert.equal(quantile([600], 0.9), 600);
+});
+
+test('分差用 P10–P90，比 max−min 抗极值', () => {
+  const majors = {
+    A: [{ year: 2025, highRank: 1000, lowRank: 2000, lowScore: 700, highScore: 700, volume: 5 }],
+    B: [{ year: 2025, highRank: 2000, lowRank: 3000, lowScore: 620, highScore: 620, volume: 5 }],
+    C: [{ year: 2025, highRank: 3000, lowRank: 4000, lowScore: 610, highScore: 610, volume: 5 }],
+    D: [{ year: 2025, highRank: 4000, lowRank: 5000, lowScore: 600, highScore: 600, volume: 5 }],
+    E: [{ year: 2025, highRank: 5000, lowRank: 6000, lowScore: 590, highScore: 590, volume: 5 }],
+  };
+  const [y] = yearlyAggregate(majors);
+  assert.equal(y.spread, 74);          // P90 668 − P10 594
+  assert.ok(y.spread < 700 - 590);     // 明显小于极差 110
+});
+
+test('录取率估计 = 招生人数 / 位次', () => {
+  const majors = { A: [{ year: 2025, highRank: 10000, lowRank: 10000, lowScore: 600, highScore: 600, volume: 50 }] };
+  const [y] = yearlyAggregate(majors);
+  assert.equal(y.difficulty, 0.5); // 50 / 10000 * 100
+});
+
+test('断档检测：同比跳变被标记，平稳序列不标记', () => {
+  const jumpy = [
+    { year: 2020, close: 10000 }, { year: 2021, close: 9000 },
+    { year: 2022, close: 8000 }, { year: 2023, close: 30000 },
+    { year: 2024, close: 12000 },
+  ];
+  const { flagged } = detectOutliers(jumpy);
+  assert.ok(flagged.has(2023), '2023 应被标为异常');
+
+  const smooth = [
+    { year: 2020, close: 10000 }, { year: 2021, close: 9800 },
+    { year: 2022, close: 9600 }, { year: 2023, close: 9500 }, { year: 2024, close: 9400 },
+  ];
+  assert.equal(detectOutliers(smooth).flagged.size, 0);
+});
+
+test('样本过少的年份会被打标', () => {
+  const majors = { A: [{ year: 2025, highRank: 1000, lowRank: 2000, lowScore: 600, highScore: 600, volume: 5 }] };
+  const candles = toCandles(yearlyAggregate(majors));
+  assert.equal(candles[0].lowSample, true);
 });
 
 /* ------------------------------ 执行 ------------------------------ */

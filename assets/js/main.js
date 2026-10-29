@@ -7,7 +7,7 @@
  * 避免出现两套口径。
  */
 
-import { buildMajorSeries, toCandles } from './aggregate.js';
+import { buildMajorSeries, detectOutliers, toCandles } from './aggregate.js';
 import { createChartController } from './charts.js';
 import { ACCEPTED_EXT, DEFAULT_MA, REGION_LABELS, PLATE_LABELS, REGIONS } from './config.js';
 import { computeIndices } from './indices.js';
@@ -17,7 +17,7 @@ import {
   listLocations, listMajors, listSchools, removeYear, schoolKey, serialize,
 } from './state.js';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage.js';
-import { formatNumber, formatPercent, safeFilename } from './utils.js';
+import { formatNumber, formatPercent, round2, safeFilename } from './utils.js';
 import {
   $, bindTabs, closeModal, fillSelect, openModal, renderDataList, renderInfoBar,
   resetInfoBar, setEmptyState, setMajorOptions, setSchoolOptions, setStatus, setStatusCount, toast,
@@ -178,12 +178,28 @@ function renderHeatView(name, series) {
   return candles;
 }
 
-function renderRankView(name, series) {
+function renderRankView(name, series, context = {}) {
   view.mode = 'rank';
   view.series = series;
 
   const candles = toCandles(series);
-  const { hasSpread } = chartController.render({ mode: 'rank', series: candles, title: name, ma: view.ma });
+
+  // 基准线：同省同板块的平均百分位换算回"位次"，与个股共用纵轴
+  const candleByYear = new Map(candles.map((candle) => [candle.year, candle]));
+  const benchmark = (context.benchmark ?? [])
+    .map((item) => {
+      const candle = candleByYear.get(item.year);
+      const candidates = candle?.candidates;
+      if (!Number.isFinite(item.percentile) || !candidates) return null;
+      return { year: item.year, rank: Math.round((item.percentile / 100) * candidates) };
+    })
+    .filter(Boolean);
+
+  const { flagged } = detectOutliers(candles);
+  const { hasSpread } = chartController.render({
+    mode: 'rank', series: candles, title: name, ma: view.ma,
+    baseline: benchmark, outliers: flagged,
+  });
   toggleSpread(hasSpread);
   setEmptyState(candles.length === 0);
 
@@ -203,6 +219,19 @@ function renderRankView(name, series) {
     ? `${delta < 0 ? '↓' : '↑'} ${formatNumber(Math.abs(delta))} 位 · ${tone.text}`
     : '首年';
 
+  // 相对强度：本校百分位 − 同省同板块平均百分位（百分点）
+  // 百分位越小 = 排名越靠前 = 越难；所以 diff<0 表示"比同类更难"
+  const benchLatest = (context.benchmark ?? []).find((item) => item.year === latest.year);
+  let relative = { text: '-', tone: '' };
+  if (benchLatest && Number.isFinite(benchLatest.percentile) && Number.isFinite(latest.percentile)) {
+    const diff = round2(latest.percentile - benchLatest.percentile);
+    const relativeTone = diff < 0 ? 'up' : diff > 0 ? 'down' : '';
+    relative = {
+      text: `${diff > 0 ? '+' : ''}${diff.toFixed(2)}pp · ${diff < 0 ? '更难' : diff > 0 ? '更易' : '持平'}`,
+      tone: relativeTone,
+    };
+  }
+
   let hardest = candles[0];
   let easiest = candles[0];
   for (const item of candles) {
@@ -216,6 +245,8 @@ function renderRankView(name, series) {
     value: formatNumber(latest.close),
     change: { text: changeText, tone: tone.tone },
     volume: `${formatNumber(latest.volume)} 人`,
+    difficulty: { text: Number.isFinite(latest.difficulty) ? `${latest.difficulty.toFixed(2)}%` : '-' },
+    relative,
     high: `${formatNumber(hardest.close)}（${hardest.year}）`,
     low: `${formatNumber(easiest.close)}（${easiest.year}）`,
   });
@@ -289,7 +320,10 @@ function renderStockTab() {
     : buildMajorSeries(item.majors[view.major] ?? []);
 
   const name = view.major === '__all__' ? `${item.name}` : `${item.name} · ${view.major}`;
-  const candles = renderRankView(name, series);
+  const benchSeries = indexCache.benchmarks?.[`${item.province}|${item.plate}`]
+    ?? indexCache.benchmarks?.[`${item.province}|all`]
+    ?? [];
+  const candles = renderRankView(name, series, { benchmark: benchSeries });
 
   const rows = candles.map((candle) => ({
     year: candle.year,

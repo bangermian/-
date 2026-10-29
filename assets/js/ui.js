@@ -120,7 +120,8 @@ export function renderDataList(containerId, rows, onDelete) {
 /* ---------------- 信息条 ---------------- */
 
 export function resetInfoBar() {
-  ['currentName', 'currentPrice', 'changeRate', 'currentVolume', 'historyHigh', 'historyLow'].forEach((id) => {
+  ['currentName', 'currentPrice', 'changeRate', 'currentVolume', 'historyHigh', 'historyLow',
+    'currentDifficulty', 'relativeStrength'].forEach((id) => {
     const el = $(id);
     if (el) el.textContent = '-';
   });
@@ -128,11 +129,16 @@ export function resetInfoBar() {
   if (change) change.className = 'value';
   const price = $('currentPrice');
   if (price) price.className = 'value';
+  const relative = $('relativeStrength');
+  if (relative) relative.className = 'value';
+  const difficulty = $('currentDifficulty');
+  if (difficulty) difficulty.className = 'value';
 }
 
 /**
- * @param {{name:string, valueLabel:string, value:string, change?:{text:string,color:string},
- *          volume:string, high:string, low:string}} info
+ * @param {{name:string, valueLabel:string, value:string, change?:{text:string,tone:string},
+ *          volume:string, high:string, low:string,
+ *          difficulty?:{text:string}, relative?:{text:string, tone:string}}} info
  */
 export function renderInfoBar(info) {
   const set = (id, text) => {
@@ -145,6 +151,7 @@ export function renderInfoBar(info) {
   set('currentVolume', info.volume ?? '-');
   set('historyHigh', info.high ?? '-');
   set('historyLow', info.low ?? '-');
+  set('currentDifficulty', info.difficulty?.text ?? '-');
 
   const change = $('changeRate');
   if (change) {
@@ -153,6 +160,12 @@ export function renderInfoBar(info) {
   }
   const price = $('currentPrice');
   if (price) price.className = `value ${info.change?.tone ?? ''}`.trim();
+
+  const relative = $('relativeStrength');
+  if (relative) {
+    relative.textContent = info.relative?.text ?? '-';
+    relative.className = `value ${info.relative?.tone ?? ''}`.trim();
+  }
 }
 
 /* ---------------- 标签页 ---------------- */

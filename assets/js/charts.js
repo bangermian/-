@@ -55,14 +55,26 @@ export function createChartController(echarts, elements) {
     return periods.every((value) => value !== null) ? periods : DEFAULT_MA;
   }
 
-  function renderKline({ mode, series, title, ma }) {
-    const periods = maPeriods(ma);
+  function renderKline({ mode, series, title, ma, baseline, outliers }) {
+    const n = series.length;
+    // 均线自适应：周期超过样本量就没有意义，直接不画（旧版 DEFAULT_MA 会在 6 个点上画出 3 条空线）
+    const periods = maPeriods(ma).filter((period) => period <= n);
     const dates = series.map((item) => `${item.year}年`);
     const values = series.map((item) => [item.open, item.close, item.low, item.high]);
     const colors = candleColors(mode);
     const inverse = mode === 'rank';
 
+    const baselineByYear = new Map((baseline ?? []).map((item) => [item.year, item.rank]));
+    const baselineData = baseline && baseline.length > 0
+      ? series.map((item) => {
+        const value = baselineByYear.get(item.year);
+        return Number.isFinite(value) ? round2(value) : null;
+      })
+      : null;
+
     const legendNames = ['K线', ...periods.map((p) => `MA${p}`)];
+    if (baselineData) legendNames.push('同类基准');
+
     const maSeries = periods.map((period, index) => ({
       name: `MA${period}`,
       type: 'line',
@@ -74,6 +86,21 @@ export function createChartController(echarts, elements) {
       z: 3,
       connectNulls: false,
     }));
+
+    const baselineSeries = baselineData
+      ? [{
+        name: '同类基准',
+        type: 'line',
+        data: baselineData,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 4,
+        lineStyle: { width: 1.4, color: '#8f9bb3', type: 'dashed' },
+        itemStyle: { color: '#8f9bb3' },
+        z: 4,
+        connectNulls: true,
+      }]
+      : [];
 
     const hardest = series.reduce((best, item) => (best === null || item.close < best.close ? item : best), null);
     const easiest = series.reduce((best, item) => (best === null || item.close > best.close ? item : best), null);
@@ -97,6 +124,20 @@ export function createChartController(echarts, elements) {
         label: { fontSize: 10, color: '#fff' },
       });
     }
+    // 断档 / 异常年份（同比跳变超过 3×MAD 且至少 20%）
+    for (const year of outliers ?? []) {
+      const index = series.findIndex((item) => item.year === year);
+      if (index < 0) continue;
+      markPoints.push({
+        name: '异常波动',
+        coord: [index, series[index].close],
+        value: '断档?',
+        symbol: 'pin',
+        symbolSize: 38,
+        itemStyle: { color: '#f39c12' },
+        label: { fontSize: 9, color: '#1a1a2e', fontWeight: 'bold' },
+      });
+    }
 
     kline.setOption({
       backgroundColor: 'transparent',
@@ -114,7 +155,7 @@ export function createChartController(echarts, elements) {
         ...baseTooltip(),
         trigger: 'axis',
         axisPointer: { type: 'cross', lineStyle: { color: '#39496e' }, crossStyle: { color: '#39496e' } },
-        formatter: (params) => formatKlineTooltip(params, series, mode),
+        formatter: (params) => formatKlineTooltip(params, series, mode, baselineByYear),
       },
       axisPointer: { link: [{ xAxisIndex: 'all' }] },
       grid: { left: 64, right: 24, top: 44, bottom: 28 },
@@ -158,6 +199,7 @@ export function createChartController(echarts, elements) {
           z: 2,
         },
         ...maSeries,
+        ...baselineSeries,
       ],
     }, true);
   }
@@ -219,15 +261,21 @@ export function createChartController(echarts, elements) {
   }
 
   function renderSpread({ series }) {
-    const rows = series.filter((item) => Number.isFinite(item.maxScore) && Number.isFinite(item.minScore));
+    // 优先用稳健分差 P10–P90；老数据没有分位数时回退到 max−min
+    const hasQuantiles = series.some((item) => Number.isFinite(item.p10Score) && Number.isFinite(item.p90Score));
+    const rows = series.filter((item) => (hasQuantiles
+      ? Number.isFinite(item.p10Score) && Number.isFinite(item.p90Score)
+      : Number.isFinite(item.maxScore) && Number.isFinite(item.minScore)));
     if (rows.length === 0) {
       spread.clear();
       return false;
     }
 
     const dates = rows.map((item) => `${item.year}年`);
-    const lows = rows.map((item) => item.minScore);
-    const diffs = rows.map((item) => round2(item.maxScore - item.minScore));
+    const lows = rows.map((item) => (hasQuantiles ? item.p10Score : item.minScore));
+    const diffs = rows.map((item) => (hasQuantiles
+      ? round2(item.p90Score - item.p10Score)
+      : round2(item.maxScore - item.minScore)));
     const colors = rows.map((item, index) => {
       if (index === 0) return COLORS.neutral;
       const prevDiff = diffs[index - 1];
@@ -235,7 +283,7 @@ export function createChartController(echarts, elements) {
     });
 
     const allLow = Math.min(...lows);
-    const allHigh = Math.max(...rows.map((item) => item.maxScore));
+    const allHigh = Math.max(...rows.map((item) => (hasQuantiles ? item.p90Score : item.maxScore)));
     const pad = Math.max(4, Math.round((allHigh - allLow) * 0.12));
 
     spread.setOption({
@@ -251,8 +299,8 @@ export function createChartController(echarts, elements) {
           if (!item) return '';
           return [
             `<b>${item.year} 年</b>`,
-            `最高专业最低分：${item.maxScore}`,
-            `最低专业最低分：${item.minScore}`,
+            `最高专业最低分：${item.maxScore ?? '-'}`,
+            `最低专业最低分：${item.minScore ?? '-'}`,
             `分差：${diffs[index]} 分`,
           ].join('<br/>');
         },
@@ -306,7 +354,7 @@ export function createChartController(echarts, elements) {
     return true;
   }
 
-  function formatKlineTooltip(params, series, mode) {
+  function formatKlineTooltip(params, series, mode, baselineByYear) {
     const index = params?.[0]?.dataIndex ?? 0;
     const item = series[index];
     if (!item) return '';
@@ -321,6 +369,10 @@ export function createChartController(echarts, elements) {
         const suffix = item.percentileEstimated ? '（估算考生数）' : '';
         rows.push(`全省百分位：${item.percentile.toFixed(2)}%${suffix}`);
       }
+      const baselineRank = baselineByYear?.get(item.year);
+      if (Number.isFinite(baselineRank)) {
+        rows.push(`同类基准位次：${formatNumber(baselineRank)}`);
+      }
     } else {
       rows.push(`热度指数：<b>${item.close.toFixed(2)}</b>`);
       if (Number.isFinite(item.percentile)) rows.push(`加权平均百分位：${item.percentile.toFixed(2)}%`);
@@ -328,20 +380,27 @@ export function createChartController(echarts, elements) {
       if (item.estimatedShare > 0) rows.push(`其中 ${item.estimatedShare}% 的样本缺考生数（按 7 万估算）`);
     }
 
-    rows.push(`招生人数：${formatNumber(item.volume)} 人`);
+    rows.push(`招生人数：${formatNumber(item.volume)} 人${item.lowSample ? '（样本偏少）' : ''}`);
+    if (Number.isFinite(item.difficulty)) {
+      rows.push(`录取率估计：<b>${item.difficulty.toFixed(2)}%</b>（招生 ÷ 位次）`);
+    }
     if (Number.isFinite(item.maxHighScore)) rows.push(`最高分：${item.maxHighScore}`);
-    if (Number.isFinite(item.maxScore)) rows.push(`最高专业最低分：${item.maxScore}`);
-    if (Number.isFinite(item.minScore)) rows.push(`最低专业最低分：${item.minScore}`);
+    if (Number.isFinite(item.p10Score) && Number.isFinite(item.p90Score)) {
+      rows.push(`专业最低分 P10–P90：${item.p10Score} – ${item.p90Score}（分差 ${item.spread}）`);
+    } else {
+      if (Number.isFinite(item.maxScore)) rows.push(`最高专业最低分：${item.maxScore}`);
+      if (Number.isFinite(item.minScore)) rows.push(`最低专业最低分：${item.minScore}`);
+    }
     return rows.join('<br/>');
   }
 
   /** 渲染全部；返回分差图是否有数据（用于决定是否收起该图） */
-  function render({ mode, series, title, ma }) {
+  function render({ mode, series, title, ma, baseline, outliers }) {
     if (!series || series.length === 0) {
       charts.forEach((chart) => chart.clear());
       return { hasSpread: false };
     }
-    renderKline({ mode, series, title, ma });
+    renderKline({ mode, series, title, ma, baseline, outliers });
     renderVolume({ series });
     const hasSpread = renderSpread({ series });
     return { hasSpread };

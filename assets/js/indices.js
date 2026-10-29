@@ -167,7 +167,15 @@ export function computeIndices(state, extraLocations = []) {
     }
   }
 
-  return { market, plate };
+  // 基准线：同省 × 同板块的平均百分位，用于算"个股相对同类强弱"
+  const benchmarks = {};
+  for (const province of byProvince.keys()) {
+    for (const plateKey of ['all', ...PLATES]) {
+      benchmarks[`${province}|${plateKey}`] = buildSeries(byProvince, [province], plateKey);
+    }
+  }
+
+  return { market, plate, benchmarks };
 }
 
 /** 该指数是否有数据 */
