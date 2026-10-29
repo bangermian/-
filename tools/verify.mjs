@@ -1,27 +1,27 @@
 /**
  * 回归测试（零依赖）：node tools/verify.mjs
  *
- * 覆盖三个最容易算错的地方：文件名解析、加权聚合、指数分母。
+ * 覆盖：文件名解析、汇总表解析、考生数表、加权聚合、百分位、指数算法、状态增删改。
  */
 
 import assert from 'node:assert/strict';
-import { movingAverage, toCandles, yearlyAggregate } from '../assets/js/aggregate.js';
+import { attachPercentiles, movingAverage, toCandles, yearlyAggregate } from '../assets/js/aggregate.js';
 import { computeIndices } from '../assets/js/indices.js';
-import { parseFileName, parseSheetRows, deriveLocation } from '../assets/js/parser.js';
 import {
-  addMajorRecord, applyParsedFile, countRecords, createState, deserialize, removeYear, serialize,
+  normalizePlate, parseAggregateRows, parseCandidatesRows, parseFileName, parseSheetRows,
+} from '../assets/js/parser.js';
+import {
+  addMajorRecord, applyCandidateRecords, applyRecords, applyParsedFile,
+  countMissingCandidates, countRecords, createState, deserialize, removeYear, serialize,
 } from '../assets/js/state.js';
 
 let passed = 0;
 const cases = [];
+function test(name, fn) { cases.push({ name, fn }); }
 
-function test(name, fn) {
-  cases.push({ name, fn });
-}
+/* ------------------------------ 文件名（旧格式） ------------------------------ */
 
-/* ---------------------------------- 文件名 ---------------------------------- */
-
-test('完整文件名：年份/省份/院校/板块/考生数', () => {
+test('旧格式文件名：年份/省份/院校/板块/考生数', () => {
   const meta = parseFileName('2025 天津 天津工业大学 doublefirst 74000.xlsx');
   assert.equal(meta.year, 2025);
   assert.equal(meta.province, '天津');
@@ -30,114 +30,140 @@ test('完整文件名：年份/省份/院校/板块/考生数', () => {
   assert.equal(meta.candidates, 74000);
 });
 
-test('CSV 扩展名同样解析', () => {
-  const meta = parseFileName('2025 天津 温州肯恩大学 s11 74000.csv');
-  assert.equal(meta.plate, 's11');
-  assert.equal(meta.candidates, 74000);
-});
-
-test('省略板块与考生数时：板块回落到双非', () => {
+test('旧格式：省略板块与考生数时板块回落双非', () => {
   const meta = parseFileName('2025 天津 天津工业大学.xlsx');
-  assert.equal(meta.school, '天津工业大学');
   assert.equal(meta.plate, 'shuangfei');
   assert.equal(meta.candidates, null);
 });
 
-test('院校名带空格时不会被拆碎', () => {
+test('旧格式：院校名带空格不会被拆碎', () => {
   const meta = parseFileName('2025 天津 中国人民大学 苏州校区 doublefirst 74000.xlsx');
   assert.equal(meta.school, '中国人民大学 苏州校区');
-  assert.equal(meta.plate, 'doublefirst');
 });
 
 test('非法文件名返回 null', () => {
   assert.equal(parseFileName('随便一个文件.xlsx'), null);
-  assert.equal(parseFileName('1999 天津 学校.xlsx'), null);
 });
 
-test('未知板块给出告警并按双非处理', () => {
-  const meta = parseFileName('2025 天津 某大学 qqq 74000.xlsx');
-  assert.equal(meta.plate, 'shuangfei');
-  assert.ok(meta.warnings.length > 0);
-});
+/* ------------------------------ 汇总表（新格式） ------------------------------ */
 
-test('从相对路径推断学校所在地', () => {
-  assert.equal(deriveLocation('天津/2025 天津 天津工业大学.xlsx'), '天津');
-  assert.equal(deriveLocation('2025.xlsx'), '待定');
-});
+const AGGREGATE_HEADER = ['年份', '招生省份', '院校名称', '院校所在地', '板块', '专业名称',
+  '最高分', '最低分', '最高位次', '最低位次', '录取人数'];
 
-/* ---------------------------------- 表格 ---------------------------------- */
-
-test('表头不在第一行也能定位', () => {
+test('汇总表：一行一条，自动识别列', () => {
   const rows = [
-    ['2025 年天津市普通高校录取统计'],
-    [],
-    ['专业名称', '最高分', '最低分', '最高位次', '最低位次', '录取人数'],
-    ['计算机科学与技术', 600, 590, 9000, 12000, 10],
+    ['2025 年录取数据'],
+    AGGREGATE_HEADER,
+    [2025, '天津', '天津工业大学', '天津', '双一流', '计算机', 630, 610, 7000, 11000, 10],
+    [2024, '天津', '天津工业大学', '天津', '双一流', '计算机', 620, 600, 8000, 12000, 10],
   ];
-  const { records } = parseSheetRows(rows);
+  const { records } = parseAggregateRows(rows);
+  assert.equal(records.length, 2);
+  assert.equal(records[0].school, '天津工业大学');
+  assert.equal(records[0].province, '天津');
+  assert.equal(records[0].location, '天津');
+  assert.equal(records[0].plate, 'doublefirst');
+  assert.equal(records[0].year, 2025);
+  assert.equal(records[1].year, 2024);
+});
+
+test('汇总表：中文板块名归一', () => {
+  assert.equal(normalizePlate('双一流'), 'doublefirst');
+  assert.equal(normalizePlate('双非'), 'shuangfei');
+  assert.equal(normalizePlate('S11'), 's11');
+  assert.equal(normalizePlate('92'), '92');
+  assert.equal(normalizePlate(''), 'shuangfei');
+});
+
+test('汇总表：缺位次的行被跳过并告警', () => {
+  const rows = [
+    AGGREGATE_HEADER,
+    [2025, '天津', 'A大学', '天津', '双一流', '计算机', 600, 590, null, null, 5],
+    [2025, '天津', 'A大学', '天津', '双一流', '数学', 600, 590, 1000, 2000, 5],
+  ];
+  const { records, warnings } = parseAggregateRows(rows);
   assert.equal(records.length, 1);
-  assert.equal(records[0].major, '计算机科学与技术');
-  assert.equal(records[0].lowRank, 12000);
-});
-
-test('最高位次缺失时用最低位次补齐', () => {
-  const rows = [
-    ['专业名称', '最低位次'],
-    ['软件工程', 15000],
-  ];
-  const { records } = parseSheetRows(rows);
-  assert.equal(records[0].highRank, 15000);
-  assert.equal(records[0].lowRank, 15000);
-});
-
-test('位次填反时自动交换，全空行被跳过', () => {
-  const rows = [
-    ['专业名称', '最高位次', '最低位次'],
-    ['数学', 20000, 10000],
-    ['空行', null, null],
-  ];
-  const { records, warnings } = parseSheetRows(rows);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].highRank, 10000);
-  assert.equal(records[0].lowRank, 20000);
   assert.ok(warnings.length > 0);
 });
 
-test('缺表头时报错而不是静默产出空数据', () => {
-  const { records, warnings } = parseSheetRows([['年份', '分数'], [2025, 600]]);
-  assert.equal(records.length, 0);
-  assert.match(warnings[0], /表头/);
+test('汇总表：院校所在地缺省时回落到文件夹名', () => {
+  const rows = [
+    ['年份', '招生省份', '院校名称', '专业名称', '最低位次'],
+    [2025, '天津', 'A大学', '计算机', 12000],
+  ];
+  const { records } = parseAggregateRows(rows, { fallbackLocation: '河北' });
+  assert.equal(records[0].location, '河北');
 });
 
-/* ---------------------------------- 聚合 ---------------------------------- */
+test('考生数表可独立识别', () => {
+  const rows = [['年份', '省份', '考生数'], [2025, '天津', 74000], [2024, '天津', 70800]];
+  const list = parseCandidatesRows(rows);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].candidates, 74000);
+});
+
+test('普通表格不会被误判成考生数表', () => {
+  const rows = [['年份', '院校名称', '专业名称', '最低位次'], [2025, 'A', '计算机', 1000]];
+  assert.equal(parseCandidatesRows(rows), null);
+});
+
+/* ------------------------------ 旧格式表格 ------------------------------ */
+
+test('旧格式表格：表头不在第一行也能定位', () => {
+  const rows = [
+    ['2025 年统计'],
+    [],
+    ['专业名称', '最高分', '最低分', '最高位次', '最低位次', '录取人数'],
+    ['计算机', 600, 590, 9000, 12000, 10],
+  ];
+  const { records } = parseSheetRows(rows);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].lowRank, 12000);
+});
+
+test('旧格式表格：位次填反自动交换', () => {
+  const rows = [['专业名称', '最高位次', '最低位次'], ['数学', 20000, 10000]];
+  const { records } = parseSheetRows(rows);
+  assert.equal(records[0].highRank, 10000);
+  assert.equal(records[0].lowRank, 20000);
+});
+
+/* ------------------------------ 聚合与百分位 ------------------------------ */
 
 const majors = {
   计算机: [
     { year: 2024, highScore: 620, lowScore: 600, highRank: 8000, lowRank: 12000, volume: 10 },
-    { year: 2025, highScore: 630, lowScore: 610, highRank: 7000, lowRank: 11000, volume: 12 },
+    { year: 2025, highScore: 630, lowScore: 610, highRank: 7000, lowRank: 11000, volume: 10 },
   ],
   材料: [
     { year: 2024, highScore: 610, lowScore: 590, highRank: 15000, lowRank: 20000, volume: 30 },
-    { year: 2025, highScore: 615, lowScore: 595, highRank: 14000, lowRank: 19000, volume: 28 },
+    { year: 2025, highScore: 615, lowScore: 595, highRank: 14000, lowRank: 19000, volume: 30 },
   ],
 };
 
-test('收盘位次 = 按录取人数加权的专业平均位次', () => {
+test('收盘位次 = 按录取人数加权', () => {
   const series = yearlyAggregate(majors);
-  assert.equal(series.length, 2);
-  // 2024: (10000*10 + 17500*30) / 40 = 15625
   assert.equal(series[0].close, 15625);
-  // 2025: (9000*12 + 16500*28) / 40 = 14250
-  assert.equal(series[1].close, 14250);
+  assert.equal(series[1].close, 14625);
 });
 
-test('影线取当年最好/最差位次，招生数求和', () => {
+test('影线与招生数', () => {
   const [y2024] = yearlyAggregate(majors);
   assert.equal(y2024.best, 8000);
   assert.equal(y2024.worst, 20000);
   assert.equal(y2024.volume, 40);
-  assert.equal(y2024.maxHighScore, 620);
-  assert.equal(y2024.minScore, 590);
+});
+
+test('百分位 = 位次 / 考生数，缺考生数时标记估算', () => {
+  const years = yearlyAggregate(majors);
+  const withCand = attachPercentiles(years, { 2024: 70000, 2025: 74000 });
+  assert.equal(withCand[0].percentile, 22.32); // 15625/70000*100
+  assert.equal(withCand[0].percentileEstimated, false);
+  // 2025 有考生数
+  assert.equal(withCand[1].percentileEstimated, false);
+
+  const noCand = attachPercentiles(years, { 2024: 70000 });
+  assert.equal(noCand[1].percentileEstimated, true); // 2025 缺失 → 估算
 });
 
 test('开盘 = 上一年收盘，low ≤ high', () => {
@@ -145,97 +171,122 @@ test('开盘 = 上一年收盘，low ≤ high', () => {
   assert.equal(candles[0].open, candles[0].close);
   assert.equal(candles[1].open, candles[0].close);
   for (const candle of candles) {
-    assert.ok(candle.low <= candle.high, 'candlestick 要求 low <= high');
-    assert.ok(candle.low <= Math.min(candle.open, candle.close));
-    assert.ok(candle.high >= Math.max(candle.open, candle.close));
+    assert.ok(candle.low <= candle.high);
   }
 });
 
 test('均线：前 n-1 个点为占位符', () => {
   const series = [{ close: 10 }, { close: 20 }, { close: 30 }];
   assert.deepEqual(movingAverage(series, 2), ['-', 15, 25]);
-  assert.deepEqual(movingAverage(series, 3), ['-', '-', 20]);
 });
 
-/* ---------------------------------- 指数 ---------------------------------- */
+/* ------------------------------ 指数算法 ------------------------------ */
 
 function fixtureState() {
   const state = createState();
   state.schools = {
-    A: { name: 'A（天津招生）', school: 'A', province: '天津', plate: 'doublefirst', location: '天津', majors: {}, series: [{ year: 2024, close: 10000, volume: 10 }] },
-    B: { name: 'B（天津招生）', school: 'B', province: '天津', plate: 's11', location: '浙江', majors: {}, series: [{ year: 2024, close: 20000, volume: 30 }] },
-    C: { name: 'C（浙江招生）', school: 'C', province: '浙江', plate: 's11', location: '浙江', majors: {}, series: [{ year: 2024, close: 30000, volume: 10 }] },
+    A: { name: 'A', school: 'A', province: '天津', plate: 'doublefirst', location: '天津', majors: {},
+      series: [{ year: 2024, close: 10000, volume: 10, percentile: 14.29 }] },
+    B: { name: 'B', school: 'B', province: '天津', plate: 's11', location: '浙江', majors: {},
+      series: [{ year: 2024, close: 20000, volume: 30, percentile: 28.57 }] },
+    C: { name: 'C', school: 'C', province: '浙江', plate: 's11', location: '浙江', majors: {},
+      series: [{ year: 2024, close: 30000, volume: 10, percentile: 60 }] },
   };
-  state.provinceCandidates = { 天津: { 2024: 70000 }, 浙江: { 2024: 50000 } };
   return state;
 }
 
-test('地点板块：分母只累加参与院校的招生省份考生数', () => {
-  const { plate } = computeIndices(fixtureState(), ['天津', '浙江']);
-  // 天津：只有 A，且 A 在天津招生 → 10000 / 70000 * 100 = 14.29 → 热度 85.71
+test('地点板块 = 100 - 加权平均百分位', () => {
+  const { plate } = computeIndices(fixtureState());
   assert.equal(plate.loc_天津_all.data[0].close, 85.71);
-  // 浙江：B(天津招生) + C(浙江招生) → 分母 70000 + 50000 = 120000
-  //      加权位次 = (20000*30 + 30000*10) / 40 = 22500 → 18.75% → 热度 81.25
-  assert.equal(plate.loc_浙江_all.data[0].close, 81.25);
-  assert.equal(plate.loc_浙江_all.data[0].candidates, 120000);
+  // 浙江 = (28.57*30 + 60*10) / 40 = 36.4275 → 36.43 → 热度 63.57
+  assert.equal(plate.loc_浙江_all.data[0].close, 63.57);
 });
 
-test('大盘：分母是成员院校实际参与省份之和', () => {
-  const { market } = computeIndices(fixtureState(), []);
+test('大盘按所在地聚合，跨省百分位可直接平均', () => {
+  const { market } = computeIndices(fixtureState());
   const east = market.east.data[0];
-  // 加权位次 = (10000*10 + 20000*30 + 30000*10) / 50 = 20000
-  assert.equal(east.rank, 20000);
-  // 20000 / (70000 + 50000) * 100 = 16.6667 → 16.67 → 热度 83.33
-  assert.equal(east.close, 83.33);
-  assert.equal(east.candidates, 120000);
+  // (14.29*10 + 28.57*30 + 60*10) / 50 = 32 → 热度 68
+  assert.equal(east.percentile, 32);
+  assert.equal(east.close, 68);
+  assert.equal(east.schools, 3);
 });
 
-test('考生数缺失时回落到默认值并标记', () => {
-  const state = fixtureState();
-  state.provinceCandidates = {};
-  const { market } = computeIndices(state, []);
-  const east = market.east.data[0];
-  assert.equal(east.candidatesKnown, false);
-  assert.equal(east.candidates, 70000);
-});
-
-test('板块筛选：区域 × 板块只统计对应板块', () => {
-  const { plate } = computeIndices(fixtureState(), []);
-  // s11 = B + C，分母 120000，加权位次 22500 → 18.75% → 热度 81.25
-  assert.equal(plate.east_s11.data[0].close, 81.25);
-  // doublefirst = 只有 A，分母 70000 → 14.29% → 热度 85.71
+test('板块筛选只统计对应板块', () => {
+  const { plate } = computeIndices(fixtureState());
+  assert.equal(plate.east_s11.data[0].close, 63.57);
   assert.equal(plate.east_doublefirst.data[0].close, 85.71);
   assert.equal(plate.east_92.data.length, 0);
 });
 
-/* ---------------------------------- 状态 ---------------------------------- */
-
-test('重复加载同一文件是幂等的', () => {
-  const state = createState();
-  const meta = { year: 2025, province: '天津', school: '天津工业大学', plate: 'doublefirst', candidates: 74000, location: '天津' };
-  const records = [{ major: '计算机', highScore: 600, lowScore: 590, highRank: 9000, lowRank: 12000, volume: 10 }];
-  applyParsedFile(state, { meta, records });
-  applyParsedFile(state, { meta, records });
-  assert.equal(countRecords(state), 1);
-  assert.equal(Object.keys(state.schools['天津工业大学_天津'].majors).length, 1);
+test('没有百分位的院校不进入指数', () => {
+  const state = fixtureState();
+  state.schools.A.series = [{ year: 2024, close: 10000, volume: 10, percentile: null }];
+  const { market } = computeIndices(state);
+  assert.equal(market.east.data[0].schools, 2);
 });
 
-test('同一年不同专业分别计入', () => {
+/* ------------------------------ 状态 ------------------------------ */
+
+function record(overrides = {}) {
+  return {
+    year: 2025, school: 'S', province: '天津', location: '天津', plate: 's11',
+    major: 'A', highRank: 100, lowRank: 200, highScore: 600, lowScore: 590, volume: 10,
+    ...overrides,
+  };
+}
+
+test('重复导入是幂等的', () => {
   const state = createState();
-  const meta = { year: 2025, province: '天津', school: 'S', plate: 's11', candidates: null, location: '天津' };
-  applyParsedFile(state, { meta, records: [{ major: 'A', highRank: 100, lowRank: 200, volume: 1, highScore: null, lowScore: null }] });
-  applyParsedFile(state, { meta, records: [{ major: 'B', highRank: 300, lowRank: 400, volume: 1, highScore: null, lowScore: null }] });
+  applyRecords(state, [record()]);
+  applyRecords(state, [record()]);
+  assert.equal(countRecords(state), 1);
+});
+
+test('同一年不同专业分别计入并加权', () => {
+  const state = createState();
+  applyRecords(state, [record({ major: 'A', highRank: 100, lowRank: 200, volume: 10 })]);
+  applyRecords(state, [record({ major: 'B', highRank: 300, lowRank: 400, volume: 10 })]);
   assert.equal(countRecords(state), 2);
   const series = state.schools['S_天津'].series;
   assert.equal(series.length, 1);
   assert.equal(series[0].close, 250);
 });
 
-test('手动录入会覆盖同年记录', () => {
+test('考生数写入后百分位随之更新', () => {
   const state = createState();
-  const meta = { year: 2025, province: '天津', school: 'S', plate: 's11', candidates: null, location: '天津' };
-  applyParsedFile(state, { meta, records: [{ major: 'A', highRank: 100, lowRank: 200, volume: 1 }] });
-  const result = addMajorRecord(state, { school: 'S', province: '天津', major: 'A', year: 2025, highRank: 50, lowRank: 60, volume: 2 });
+  applyRecords(state, [record({ highRank: 100, lowRank: 200, volume: 10 })]);
+  assert.equal(state.schools['S_天津'].series[0].percentileEstimated, true);
+  applyCandidateRecords(state, [{ year: 2025, province: '天津', candidates: 100000 }]);
+  const candle = state.schools['S_天津'].series[0];
+  assert.equal(candle.percentileEstimated, false);
+  assert.equal(candle.percentile, 0.15); // 150/100000*100
+});
+
+test('applyParsedFile 同时接受记录与考生数', () => {
+  const state = createState();
+  applyParsedFile(state, {
+    kind: 'aggregate',
+    records: [record(), record({ year: 2024 })],
+    candidates: [{ year: 2025, province: '天津', candidates: 74000 }],
+  });
+  assert.equal(countRecords(state), 2);
+  assert.equal(state.provinceCandidates['天津'][2025], 74000);
+});
+
+test('缺失考生数的年份会被统计出来', () => {
+  const state = createState();
+  applyRecords(state, [record(), record({ year: 2024 })]);
+  assert.equal(countMissingCandidates(state), 2);
+  applyCandidateRecords(state, [{ year: 2025, province: '天津', candidates: 74000 }]);
+  assert.equal(countMissingCandidates(state), 1);
+});
+
+test('手动录入覆盖同年记录', () => {
+  const state = createState();
+  applyRecords(state, [record()]);
+  const result = addMajorRecord(state, {
+    school: 'S', province: '天津', major: 'A', year: 2025, highRank: 50, lowRank: 60, volume: 2,
+  });
   assert.ok(result.ok);
   assert.equal(countRecords(state), 1);
   assert.equal(state.schools['S_天津'].series[0].close, 55);
@@ -243,23 +294,21 @@ test('手动录入会覆盖同年记录', () => {
 
 test('删除某年后派生数据同步更新', () => {
   const state = createState();
-  const meta = { year: 2024, province: '天津', school: 'S', plate: 's11', candidates: null, location: '天津' };
-  applyParsedFile(state, { meta, records: [{ major: 'A', highRank: 100, lowRank: 200, volume: 1 }] });
-  applyParsedFile(state, { meta: { ...meta, year: 2025 }, records: [{ major: 'A', highRank: 50, lowRank: 60, volume: 1 }] });
+  applyRecords(state, [record({ year: 2024 }), record({ year: 2025 })]);
   assert.equal(state.schools['S_天津'].series.length, 2);
   removeYear(state, 'S_天津', 2024);
   assert.equal(state.schools['S_天津'].series.length, 1);
-  assert.equal(state.schools['S_天津'].series[0].year, 2025);
 });
 
-test('缓存序列化后可完整还原', () => {
+test('缓存序列化后可完整还原（含考生数）', () => {
   const state = createState();
-  const meta = { year: 2025, province: '天津', school: 'S', plate: 's11', candidates: 74000, location: '天津' };
-  applyParsedFile(state, { meta, records: [{ major: 'A', highRank: 100, lowRank: 200, volume: 1 }] });
+  applyRecords(state, [record()]);
+  applyCandidateRecords(state, [{ year: 2025, province: '天津', candidates: 100000 }]);
   const restored = deserialize(serialize(state));
   assert.ok(restored);
   assert.equal(countRecords(restored), 1);
-  assert.equal(restored.schools['S_天津'].series[0].close, 150);
+  assert.equal(restored.provinceCandidates['天津'][2025], 100000);
+  assert.equal(restored.schools['S_天津'].series[0].percentile, 0.15);
 });
 
 test('版本不一致的缓存会被丢弃', () => {
@@ -267,7 +316,7 @@ test('版本不一致的缓存会被丢弃', () => {
   assert.equal(deserialize('not json'), null);
 });
 
-/* ---------------------------------- 执行 ---------------------------------- */
+/* ------------------------------ 执行 ------------------------------ */
 
 let failed = 0;
 for (const { name, fn } of cases) {

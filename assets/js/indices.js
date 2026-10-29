@@ -1,22 +1,28 @@
 /**
  * 指数计算：把个股 K 线聚合成大盘 / 板块指数。
  *
- * 口径（相对旧版的三处修正）：
- *  1. 旧版把所有省份的考生数混用"第一个文件"的值当全局分母，跨省跨年都会算错。
- *     这里为每个桶记录「实际参与的招生省份」，分母 = 这些省份当年考生数之和，
- *     既不会把没数据的省份算进来，也不会跨年串号。
- *  2. 旧版在 4 处循环里反复遍历全部院校来收集年份（O(n²)），
- *     这里只遍历一次，先建桶再出结果。
- *  3. 指数统一换算成「热度指数 = 100 - 百分位」，数值越大越难考，
- *     和个股"越靠上越难"的视觉方向保持一致。
+ * 核心口径（这是本次算法优化的重点）：
+ *   位次的绝对值**跨省不可比**（天津第 10000 名和北京第 10000 名不是一回事），
+ *   所以先把每所院校每年的位次换算成**该省的百分位**，再按招生人数加权平均，
+ *   最后取热度 = 100 - 平均百分位。这样不同省份、不同考生规模的学校才能放进同一个指数。
+ *
+ *   旧版直接对原始位次做加权平均，再除以一个游客数，跨省合并时量纲是错的。
  */
 
-import { DEFAULT_CANDIDATES, PLATES, REGIONS } from './config.js';
+import { PLATES, REGIONS } from './config.js';
 import { round2 } from './utils.js';
 
-/** 建一个空桶 */
 function emptyAcc() {
-  return { rv: 0, v: 0, rankMin: Infinity, rankMax: -Infinity, provinces: new Set() };
+  return {
+    weightedPercentile: 0,
+    weight: 0,
+    volume: 0,
+    minPercentile: Infinity,
+    maxPercentile: -Infinity,
+    estimated: 0,
+    total: 0,
+    locations: new Set(),
+  };
 }
 
 /** 单次遍历建立聚合桶：分组 × 板块 × 年份 */
@@ -24,30 +30,36 @@ function buildBuckets(schools) {
   const byLocation = new Map();
   const byProvince = new Map();
 
-  const add = (store, groupKey, plate, year, close, volume, province) => {
+  const add = (store, groupKey, plate, candle, province) => {
+    if (!Number.isFinite(candle.percentile)) return;
+
     let group = store.get(groupKey);
     if (!group) { group = new Map(); store.set(groupKey, group); }
     let plates = group.get(plate);
     if (!plates) { plates = new Map(); group.set(plate, plates); }
-    let acc = plates.get(year);
-    if (!acc) { acc = emptyAcc(); plates.set(year, acc); }
-    acc.rv += close * volume;
-    acc.v += volume;
-    acc.rankMin = Math.min(acc.rankMin, close);
-    acc.rankMax = Math.max(acc.rankMax, close);
-    acc.provinces.add(province);
+    let acc = plates.get(candle.year);
+    if (!acc) { acc = emptyAcc(); plates.set(candle.year, acc); }
+
+    const volume = candle.volume ?? 0;
+    const weight = volume > 0 ? volume : 1;
+
+    acc.weightedPercentile += candle.percentile * weight;
+    acc.weight += weight;
+    acc.volume += volume;
+    acc.minPercentile = Math.min(acc.minPercentile, candle.percentile);
+    acc.maxPercentile = Math.max(acc.maxPercentile, candle.percentile);
+    acc.total += 1;
+    if (candle.percentileEstimated) acc.estimated += 1;
+    acc.locations.add(province);
   };
 
   for (const school of Object.values(schools)) {
     const location = school.location || '待定';
     for (const candle of school.series ?? []) {
-      const close = candle.close;
-      if (!Number.isFinite(close)) continue;
-      const volume = candle.volume ?? 0;
-      add(byLocation, location, 'all', candle.year, close, volume, school.province);
-      add(byLocation, location, school.plate, candle.year, close, volume, school.province);
-      add(byProvince, school.province, 'all', candle.year, close, volume, school.province);
-      add(byProvince, school.province, school.plate, candle.year, close, volume, school.province);
+      add(byLocation, location, 'all', candle, school.province);
+      add(byLocation, location, school.plate, candle, school.province);
+      add(byProvince, school.province, 'all', candle, school.province);
+      add(byProvince, school.province, school.plate, candle, school.province);
     }
   }
 
@@ -60,11 +72,14 @@ function mergeBuckets(store, groupKeys, plate, year) {
   for (const key of groupKeys) {
     const acc = store.get(key)?.get(plate)?.get(year);
     if (!acc) continue;
-    merged.rv += acc.rv;
-    merged.v += acc.v;
-    merged.rankMin = Math.min(merged.rankMin, acc.rankMin);
-    merged.rankMax = Math.max(merged.rankMax, acc.rankMax);
-    for (const province of acc.provinces) merged.provinces.add(province);
+    merged.weightedPercentile += acc.weightedPercentile;
+    merged.weight += acc.weight;
+    merged.volume += acc.volume;
+    merged.minPercentile = Math.min(merged.minPercentile, acc.minPercentile);
+    merged.maxPercentile = Math.max(merged.maxPercentile, acc.maxPercentile);
+    merged.estimated += acc.estimated;
+    merged.total += acc.total;
+    for (const province of acc.locations) merged.locations.add(province);
   }
   return merged;
 }
@@ -80,51 +95,31 @@ function collectYears(store, groupKeys, plate) {
   return [...years].sort((a, b) => a - b);
 }
 
-/** 分母：参与该桶的各招生省份当年考生数之和 */
-function resolveCandidates(provinceCandidates, provinces, year) {
-  let sum = 0;
-  let known = false;
-  for (const province of provinces) {
-    const value = provinceCandidates?.[province]?.[year];
-    if (value > 0) { sum += value; known = true; }
-  }
-  return known ? { total: sum, known: true } : { total: DEFAULT_CANDIDATES, known: false };
-}
-
-/** 加权结果 → 展示序列（热度空间，数值越大越难） */
-function toIndexItem(year, merged, provinceCandidates) {
-  if (merged.v <= 0 || merged.provinces.size === 0) return null;
-
-  const rank = round2(merged.rv / merged.v);
-  if (rank === null) return null;
-
-  const { total, known } = resolveCandidates(provinceCandidates, merged.provinces, year);
-  const percentile = round2((rank / total) * 100);
+/** 加权百分位 → 展示序列（热度空间：数值越大越难） */
+function toIndexItem(year, merged) {
+  if (merged.weight <= 0) return null;
+  const percentile = round2(merged.weightedPercentile / merged.weight);
   if (percentile === null) return null;
-
-  const pctMin = round2((merged.rankMin / total) * 100);
-  const pctMax = round2((merged.rankMax / total) * 100);
 
   return {
     year,
+    // 热度 = 100 - 百分位；best/worst 供 K 线上/下影线使用（注意热度方向与百分位相反）
     close: round2(100 - percentile),
-    best: round2(100 - pctMax),
-    worst: round2(100 - pctMin),
-    volume: merged.v,
-    rank,
+    best: round2(100 - merged.maxPercentile),
+    worst: round2(100 - merged.minPercentile),
+    volume: merged.volume,
     percentile,
-    candidates: total,
-    candidatesKnown: known,
-    provinces: [...merged.provinces].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    schools: merged.total,
+    estimatedShare: merged.total > 0 ? round2((merged.estimated / merged.total) * 100) : 0,
+    provinces: [...merged.locations].sort((a, b) => a.localeCompare(b, 'zh-CN')),
   };
 }
 
-/** 某个分组集合 × 板块 → 完整序列 */
-function buildSeries(store, groupKeys, plate, provinceCandidates) {
+function buildSeries(store, groupKeys, plate) {
   const series = [];
   for (const year of collectYears(store, groupKeys, plate)) {
     const merged = mergeBuckets(store, groupKeys, plate, year);
-    const item = toIndexItem(year, merged, provinceCandidates);
+    const item = toIndexItem(year, merged);
     if (item) series.push(item);
   }
   return series;
@@ -132,7 +127,7 @@ function buildSeries(store, groupKeys, plate, provinceCandidates) {
 
 /**
  * 计算全部大盘 / 板块指数。
- * @param {{schools:object, provinceCandidates:object}} state
+ * @param {{schools:object}} state
  * @param {string[]} extraLocations 额外需要生成板块键的地点
  */
 export function computeIndices(state, extraLocations = []) {
@@ -140,35 +135,34 @@ export function computeIndices(state, extraLocations = []) {
   const market = {};
   const plate = {};
 
-  // ---- 大盘：按学校所在地聚合到区域 ----
+  // 大盘：按学校所在地聚合到区域
   for (const [regionKey, provinces] of Object.entries(REGIONS)) {
     market[regionKey] = {
       key: regionKey,
       mode: 'heat',
-      data: buildSeries(byLocation, provinces, 'all', state.provinceCandidates),
+      data: buildSeries(byLocation, provinces, 'all'),
     };
   }
 
-  // ---- 区域 × 板块 ----
+  // 区域 × 板块（按招生省份归组，便于回答"某板块在某大区的表现"）
   for (const [regionKey, provinces] of Object.entries(REGIONS)) {
     for (const plateKey of PLATES) {
       plate[`${regionKey}_${plateKey}`] = {
         key: `${regionKey}_${plateKey}`,
         mode: 'heat',
-        data: buildSeries(byProvince, provinces, plateKey, state.provinceCandidates),
+        data: buildSeries(byProvince, provinces, plateKey),
       };
     }
   }
 
-  // ---- 地点 × (板块 | 全部) ----
-  // 以「学校所在地」分组：真正回答"某地高校整体热度"
+  // 地点 × (板块 | 全部)：回答"某地高校整体热度"
   const locations = new Set([...byLocation.keys(), ...extraLocations]);
   for (const location of locations) {
     for (const plateKey of ['all', ...PLATES]) {
       plate[`loc_${location}_${plateKey}`] = {
         key: `loc_${location}_${plateKey}`,
         mode: 'heat',
-        data: buildSeries(byLocation, [location], plateKey, state.provinceCandidates),
+        data: buildSeries(byLocation, [location], plateKey),
       };
     }
   }

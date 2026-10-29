@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 图表渲染：K 线 + 成交量 + 分差 三联图，带联动缩放。
  *
  * 视觉口径（与说明页一致）：
@@ -317,14 +317,15 @@ export function createChartController(echarts, elements) {
       rows.push(`收盘位次：${formatNumber(item.close)}`);
       rows.push(`最好位次：${formatNumber(item.best ?? item.low)}`);
       rows.push(`最差位次：${formatNumber(item.worst ?? item.high)}`);
+      if (Number.isFinite(item.percentile)) {
+        const suffix = item.percentileEstimated ? '（估算考生数）' : '';
+        rows.push(`全省百分位：${item.percentile.toFixed(2)}%${suffix}`);
+      }
     } else {
       rows.push(`热度指数：<b>${item.close.toFixed(2)}</b>`);
-      if (Number.isFinite(item.rank)) rows.push(`加权平均位次：${formatNumber(item.rank)}`);
-      if (Number.isFinite(item.percentile)) rows.push(`百分位：${item.percentile.toFixed(2)}%`);
-      if (Number.isFinite(item.candidates)) {
-        const suffix = item.candidatesKnown === false ? '（估算）' : '';
-        rows.push(`考生总数：${formatNumber(item.candidates)}${suffix}`);
-      }
+      if (Number.isFinite(item.percentile)) rows.push(`加权平均百分位：${item.percentile.toFixed(2)}%`);
+      if (Number.isFinite(item.schools)) rows.push(`样本院校：${item.schools} 所`);
+      if (item.estimatedShare > 0) rows.push(`其中 ${item.estimatedShare}% 的样本缺考生数（按 7 万估算）`);
     }
 
     rows.push(`招生人数：${formatNumber(item.volume)} 人`);

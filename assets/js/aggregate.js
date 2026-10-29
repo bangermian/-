@@ -1,13 +1,17 @@
 /**
  * 聚合计算：专业记录 → 院校年度 K 线。
  *
- * 口径（与 help.html 中的公式一致）：
+ * 口径（与 help.html 的公式一致）：
  *   专业平均位次 = (最高位次 + 最低位次) / 2
  *   院校收盘位次 = Σ(专业平均位次 × 该专业录取人数) / Σ(录取人数)
  *   开盘位次     = 上一年的收盘位次（首年为当年收盘）
- *   上影线/下影线 = 当年所有专业里最好 / 最差的位次
+ *   上下影线     = 当年所有专业里最好 / 最差的位次
+ *   百分位       = 收盘位次 / 该省当年考生数 × 100
+ *
+ * 百分位是跨省可比的量纲，指数层只聚合百分位，不再直接平均位次。
  */
 
+import { DEFAULT_CANDIDATES } from './config.js';
 import { round2, sortByYear } from './utils.js';
 
 /**
@@ -79,6 +83,25 @@ export function yearlyAggregate(majors) {
 }
 
 /**
+ * 给每年补上百分位。
+ * 缺少考生数时用默认值估算，并打上 estimated 标记（界面上会提示）。
+ * @param {Array<object>} years yearlyAggregate 的结果
+ * @param {Record<string|number, number>} candidatesByYear 该省逐年考生数
+ */
+export function attachPercentiles(years, candidatesByYear = {}) {
+  return years.map((item) => {
+    const declared = candidatesByYear?.[item.year];
+    const candidates = declared > 0 ? declared : DEFAULT_CANDIDATES;
+    return {
+      ...item,
+      candidates,
+      percentile: item.close > 0 ? round2((item.close / candidates) * 100) : null,
+      percentileEstimated: !(declared > 0),
+    };
+  });
+}
+
+/**
  * 给年度聚合结果补上 open / low / high，得到可直接喂给 ECharts 的 K 线数据。
  *
  * 注意：位次"越小越难"，best 是数值最小的位次。ECharts 的 candlestick 要求
@@ -103,21 +126,24 @@ export function toCandles(series) {
       maxScore: item.maxScore ?? null,
       minScore: item.minScore ?? null,
       maxHighScore: item.maxHighScore ?? null,
-      rank: item.rank ?? null,
       percentile: item.percentile ?? null,
+      percentileEstimated: Boolean(item.percentileEstimated),
       candidates: item.candidates ?? null,
-      candidatesKnown: item.candidatesKnown ?? null,
     };
   });
 }
 
-/** 专业字典 → 院校整体 K 线 */
-export function buildSchoolSeries(majors) {
-  return toCandles(yearlyAggregate(majors));
+/**
+ * 专业字典 → 院校整体 K 线
+ * @param {object} majors
+ * @param {Record<string|number, number>} candidatesByYear
+ */
+export function buildSchoolSeries(majors, candidatesByYear = {}) {
+  return toCandles(attachPercentiles(yearlyAggregate(majors), candidatesByYear));
 }
 
-/** 单个专业 → K 线（只保留该专业的记录） */
-export function buildMajorSeries(records) {
+/** 单个专业 → K 线 */
+export function buildMajorSeries(records, candidatesByYear = {}) {
   const yearly = sortByYear(records ?? []).map((record) => ({
     year: record.year,
     close: round2((record.highRank + record.lowRank) / 2),
@@ -128,13 +154,11 @@ export function buildMajorSeries(records) {
     minScore: record.lowScore ?? null,
     maxHighScore: record.highScore ?? null,
   }));
-  return toCandles(yearly);
+  return toCandles(attachPercentiles(yearly, candidatesByYear));
 }
 
 /**
  * 移动平均。前 n-1 个点用 '-' 占位，保持与横轴等长（ECharts 会跳过）。
- * @param {Array<{close:number}>} data
- * @param {number} period
  */
 export function movingAverage(data, period) {
   const window = Math.max(1, Math.floor(period));
@@ -148,7 +172,7 @@ export function movingAverage(data, period) {
   return result;
 }
 
-/** 年度涨跌（位次变化）。返回 {delta, percent, direction} */
+/** 年度涨跌（位次变化）。 */
 export function changeOfLatest(candles) {
   if (!candles || candles.length === 0) return null;
   const latest = candles[candles.length - 1];
@@ -158,4 +182,18 @@ export function changeOfLatest(candles) {
   const percent = round2((delta / prev.close) * 100);
   const direction = delta === 0 ? 'flat' : delta > 0 ? 'up' : 'down';
   return { latest, prev, delta, percent, direction };
+}
+
+/** 波动率：年度涨跌幅的标准差（越小越稳定），用于给"稳定性"排序 */
+export function volatility(candles) {
+  const changes = [];
+  for (let i = 1; i < (candles?.length ?? 0); i += 1) {
+    const prev = candles[i - 1].close;
+    if (!prev) continue;
+    changes.push((candles[i].close - prev) / prev);
+  }
+  if (changes.length < 2) return null;
+  const mean = changes.reduce((a, b) => a + b, 0) / changes.length;
+  const variance = changes.reduce((a, b) => a + (b - mean) ** 2, 0) / (changes.length - 1);
+  return round2(Math.sqrt(variance) * 100);
 }

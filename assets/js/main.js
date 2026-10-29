@@ -13,8 +13,8 @@ import { ACCEPTED_EXT, DEFAULT_MA, REGION_LABELS, PLATE_LABELS, REGIONS } from '
 import { computeIndices } from './indices.js';
 import { parseWorkbookFile } from './parser.js';
 import {
-  addMajorRecord, applyParsedFile, countRecords, createState, deserialize, listLocations,
-  listMajors, listSchools, removeYear, schoolKey, serialize,
+  addMajorRecord, applyParsedFile, countMissingCandidates, countRecords, createState, deserialize,
+  listLocations, listMajors, listSchools, removeYear, schoolKey, serialize,
 } from './state.js';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage.js';
 import { formatNumber, formatPercent, safeFilename } from './utils.js';
@@ -306,7 +306,8 @@ function seriesRows(series) {
     .map((item) => ({
       year: item.year,
       text: formatNumber(item.close, 2),
-      meta: `位次 ${formatNumber(item.rank)}`,
+      meta: `${Number.isFinite(item.percentile) ? `百分位 ${item.percentile.toFixed(2)}%` : ''}`
+        + `${item.schools ? ` · ${item.schools} 校` : ''}`,
       deletable: false,
     }));
 }
@@ -440,6 +441,7 @@ async function handleFolderChange(event) {
   let done = 0;
   let succeeded = 0;
   let recordCount = 0;
+  let candidateCount = 0;
   const skipped = [];
   const failed = [];
 
@@ -451,14 +453,14 @@ async function handleFolderChange(event) {
     try {
       const buffer = await file.arrayBuffer();
       const parsed = parseWorkbookFile({ name: file.name, relPath, buffer, XLSX: window.XLSX });
-      if (!parsed.meta) {
-        skipped.push(`${file.name}：文件名不规范（需「年份 招生省份 院校 板块 考生数」）`);
-      } else if (parsed.records.length === 0) {
-        skipped.push(`${file.name}：${parsed.warnings.join('；') || '没有有效行'}`);
+
+      if (parsed.records.length === 0 && parsed.candidates.length === 0) {
+        skipped.push(`${file.name}：${parsed.warnings[0] ?? '没有有效行'}`);
       } else {
         const applied = applyParsedFile(state, parsed);
         recordCount += applied.added;
-        succeeded += 1;
+        candidateCount += applied.candidates;
+        if (applied.added > 0 || applied.candidates > 0) succeeded += 1;
       }
     } catch (error) {
       failed.push(`${file.name}：${error?.message ?? '解析异常'}`);
@@ -471,10 +473,11 @@ async function handleFolderChange(event) {
     }
   }
 
-  if (Object.keys(state.schools).length === 0) {
+  if (Object.keys(state.schools).length === 0 && candidateCount === 0) {
     setStatus('未能从所选文件夹中读到有效数据', 'warn');
     setEmptyState(true);
     toast(`没有读到有效数据${skipped.length ? `：${skipped[0]}` : ''}`, 'err', 6000);
+    reportProblems(skipped, failed, '跳过', '失败');
     return;
   }
 
@@ -488,7 +491,14 @@ async function handleFolderChange(event) {
   const elapsed = ((performance.now() - started) / 1000).toFixed(1);
   const schools = Object.keys(state.schools).length;
   setStatus(`已加载 ${succeeded} 个文件 · 用时 ${elapsed}s`, 'ok');
-  toast(`加载完成：${succeeded} 个文件 / ${recordCount} 条记录 / 共 ${schools} 所院校`, 'ok', 4200);
+  const parts = [`${succeeded} 个文件`, `${recordCount} 条记录`, `${schools} 所院校`];
+  if (candidateCount > 0) parts.push(`${candidateCount} 条考生数`);
+  toast(`加载完成：${parts.join(' / ')}`, 'ok', 4200);
+
+  const missing = countMissingCandidates(state);
+  if (missing > 0) {
+    toast(`${missing} 个「院校-年份」没有考生数，百分位按 7 万估算（可在模板里的「考生数」表补齐）`, 'err', 8000);
+  }
   reportProblems(skipped, failed, '跳过', '失败');
 }
 
@@ -608,11 +618,70 @@ function exportAllData() {
   toast(`已导出 ${sheetCount} 所院校（每校一个工作表）`, 'ok');
 }
 
+/* ============================ 模板 ============================ */
+
+const TEMPLATE_SCORE_HEADER = [
+  '年份', '招生省份', '院校名称', '院校所在地', '板块', '专业名称',
+  '最高分', '最低分', '最高位次', '最低位次', '录取人数',
+];
+
+const TEMPLATE_CANDIDATE_HEADER = ['年份', '省份', '考生数'];
+
+const TEMPLATE_GUIDE = [
+  ['使用说明'],
+  [''],
+  ['1. 只需要一个「分数数据」表：一行 = 一所学校的一个专业在某一年的录取情况。'],
+  ['2. 必填列：年份、招生省份、院校名称、专业名称、最低位次（最高位次缺失时自动用最低位次补）。'],
+  ['3. 可选列：院校所在地（缺省取文件所在文件夹名）、板块（92/双一流/新型研究型/S11/双非）、'],
+  ['   最高分、最低分、录取人数。'],
+  ['4. 「考生数」表用来把位次换算成百分位，跨省才能比较；缺省时按 7 万估算并在界面提示。'],
+  ['5. 一个文件可以放任意多行、任意多学校；也兼容旧格式（一个文件一所学校一年，元数据写在文件名里）。'],
+  [''],
+  ['板块取值：92 / doublefirst / newresearch / s11 / shuangfei，也可以直接写中文：'],
+  ['         92 / 双一流 / 新型研究型 / 中外合办 / 双非'],
+  [''],
+  ['示例（可直接删除）：'],
+  ['2025  天津  天津工业大学  天津  doublefirst  计算机科学与技术  630  610  7000  11000  10'],
+];
+
+function downloadTemplate() {
+  if (!window.XLSX) {
+    toast('表格库还没加载好，请稍后重试', 'err');
+    return;
+  }
+  const workbook = XLSX.utils.book_new();
+
+  const scoreSheet = XLSX.utils.aoa_to_sheet([
+    TEMPLATE_SCORE_HEADER,
+    ['2025', '天津', '天津工业大学', '天津', 'doublefirst', '计算机科学与技术', 630, 610, 7000, 11000, 10],
+    ['2025', '天津', '天津工业大学', '天津', 'doublefirst', '材料科学与工程', 615, 595, 14000, 19000, 30],
+    ['2024', '天津', '天津工业大学', '天津', 'doublefirst', '计算机科学与技术', 620, 600, 8000, 12000, 10],
+  ]);
+  scoreSheet['!cols'] = [8, 10, 18, 12, 14, 26, 10, 10, 12, 12, 10].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, scoreSheet, '分数数据');
+
+  const candidateSheet = XLSX.utils.aoa_to_sheet([
+    TEMPLATE_CANDIDATE_HEADER,
+    ['2024', '天津', 70800],
+    ['2025', '天津', 74000],
+  ]);
+  candidateSheet['!cols'] = [8, 10, 12].map((wch) => ({ wch }));
+  XLSX.utils.book_append_sheet(workbook, candidateSheet, '考生数');
+
+  const guideSheet = XLSX.utils.aoa_to_sheet(TEMPLATE_GUIDE);
+  guideSheet['!cols'] = [{ wch: 100 }];
+  XLSX.utils.book_append_sheet(workbook, guideSheet, '填写说明');
+
+  XLSX.writeFile(workbook, '高考顺_数据模板.xlsx');
+  toast('模板已下载：填好「分数数据」表即可直接加载', 'ok');
+}
+
 /* ============================ 启动 ============================ */
 
 function bindEvents() {
   $('btnLoad')?.addEventListener('click', () => $('folderInput')?.click());
   $('folderInput')?.addEventListener('change', handleFolderChange);
+  $('btnTemplate')?.addEventListener('click', downloadTemplate);
   $('btnExportAll')?.addEventListener('click', exportAllData);
   $('btnExportStock')?.addEventListener('click', () => {
     if (!stockEntry().item) { toast('请先加载个股', 'err'); return; }

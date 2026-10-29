@@ -2,7 +2,7 @@
  * 应用状态与数据变更。
  *
  * 状态是唯一事实来源，派生数据（series）在每次变更后重建，
- * 这样"手动录入 / 删除 / 重新加载"永远走同一条计算路径，不会出现两套口径。
+ * 这样「加载 / 手录 / 删除 / 读缓存」永远走同一条计算路径。
  */
 
 import { buildSchoolSeries, buildMajorSeries } from './aggregate.js';
@@ -23,11 +23,16 @@ export function schoolKey(school, province) {
   return `${school}_${province}`;
 }
 
+/** 某省逐年的考生数 */
+export function candidatesFor(state, province) {
+  return state.provinceCandidates[province] ?? {};
+}
+
 /** 重建单个院校的 K 线 */
 export function rebuildSchool(state, key) {
   const item = state.schools[key];
   if (!item) return null;
-  item.series = buildSchoolSeries(item.majors);
+  item.series = buildSchoolSeries(item.majors, candidatesFor(state, item.province));
   return item.series;
 }
 
@@ -37,11 +42,23 @@ export function rebuildAll(state) {
   return state;
 }
 
-/** 记录某省某年考生数（来自文件名，同一省份同年出现多次时以先到者为准） */
+/** 记录某省某年考生数（同一省份同年以先写入者为准） */
 function rememberCandidates(state, province, year, candidates) {
-  if (!candidates || !province) return;
+  if (!candidates || !province || !year) return false;
   const bucket = state.provinceCandidates[province] ?? (state.provinceCandidates[province] = {});
-  if (!bucket[year]) bucket[year] = candidates;
+  if (bucket[year]) return false;
+  bucket[year] = Math.round(candidates);
+  return true;
+}
+
+/** 批量写入考生数；返回写入条数 */
+export function applyCandidateRecords(state, list) {
+  let written = 0;
+  for (const item of list ?? []) {
+    if (rememberCandidates(state, item.province, item.year, item.candidates)) written += 1;
+  }
+  if (written > 0) rebuildAll(state);
+  return written;
 }
 
 /** 确保院校存在，返回其对象 */
@@ -69,34 +86,63 @@ function ensureSchool(state, { school, province, plate, location }) {
 }
 
 /**
- * 写入一个文件解析结果。
- * 同一「院校 + 专业 + 年份」会覆盖旧值，因此重复加载同一文件夹是幂等的。
+ * 写入统一记录（新旧格式都会先归一成这个形状）。
+ * 同一「院校 + 专业 + 年份」会覆盖旧值，因此重复导入是幂等的。
+ * @returns {{keys:string[], added:number}}
  */
-export function applyParsedFile(state, { meta, records }) {
-  if (!meta || !records?.length) return { key: null, added: 0 };
+export function applyRecords(state, records) {
+  if (!records?.length) return { keys: [], added: 0 };
 
-  const item = ensureSchool(state, meta);
-  rememberCandidates(state, meta.province, meta.year, meta.candidates);
-
+  const touched = new Map();
   let added = 0;
+
   for (const record of records) {
+    if (!record?.school || !record?.province || !record?.major || !record?.year) continue;
+
+    const item = ensureSchool(state, {
+      school: record.school,
+      province: record.province,
+      plate: record.plate,
+      location: record.location,
+    });
+    const key = schoolKey(record.school, record.province);
+    touched.set(key, item);
+
     const bucket = item.majors[record.major] ?? (item.majors[record.major] = []);
     const next = {
-      year: meta.year,
-      highScore: record.highScore,
-      lowScore: record.lowScore,
+      year: Number(record.year),
+      highScore: record.highScore ?? null,
+      lowScore: record.lowScore ?? null,
       highRank: record.highRank,
       lowRank: record.lowRank,
-      volume: record.volume,
+      volume: Math.round(record.volume ?? 0),
     };
-    const index = bucket.findIndex((entry) => entry.year === meta.year);
+    const index = bucket.findIndex((entry) => entry.year === next.year);
     if (index >= 0) bucket[index] = next;
     else bucket.push(next);
     added += 1;
   }
 
-  rebuildSchool(state, schoolKey(meta.school, meta.province));
-  return { key: schoolKey(meta.school, meta.province), added };
+  for (const key of touched.keys()) rebuildSchool(state, key);
+  return { keys: [...touched.keys()], added };
+}
+
+/**
+ * 写入一个文件的解析结果（parser.parseWorkbookFile 的返回值）。
+ */
+export function applyParsedFile(state, parsed) {
+  const result = { keys: [], added: 0, candidates: 0 };
+  if (!parsed) return result;
+
+  if (parsed.candidates?.length) {
+    result.candidates = applyCandidateRecords(state, parsed.candidates);
+  }
+  if (parsed.records?.length) {
+    const applied = applyRecords(state, parsed.records);
+    result.keys = applied.keys;
+    result.added = applied.added;
+  }
+  return result;
 }
 
 /**
@@ -155,7 +201,7 @@ export function removeYear(state, key, year, major = null) {
   return removed > 0;
 }
 
-/** 已出现的学校所在地（排序、去重、排除占位值） */
+/** 已出现的学校所在地 */
 export function listLocations(state) {
   const set = new Set();
   for (const item of Object.values(state.schools)) {
@@ -180,6 +226,18 @@ export function countRecords(state) {
   return total;
 }
 
+/** 有多少个「院校-年份」缺少考生数（百分位会被估算） */
+export function countMissingCandidates(state) {
+  let missing = 0;
+  for (const item of Object.values(state.schools)) {
+    const map = candidatesFor(state, item.province);
+    for (const candle of item.series ?? []) {
+      if (!map[candle.year]) missing += 1;
+    }
+  }
+  return missing;
+}
+
 /** 专业名列表 */
 export function listMajors(item) {
   return Object.keys(item?.majors ?? {}).sort((a, b) => a.localeCompare(b, 'zh-CN'));
@@ -190,10 +248,10 @@ export function seriesFor(state, key, major) {
   const item = state.schools[key];
   if (!item) return [];
   if (!major || major === '__all__') return item.series ?? [];
-  return buildMajorSeries(item.majors[major] ?? []);
+  return buildMajorSeries(item.majors[major] ?? [], candidatesFor(state, item.province));
 }
 
-/** 序列末值与上一年对比，返回 {delta, percent, direction} */
+/** 序列末值与上一年对比 */
 export function latestChange(series) {
   if (!series || series.length === 0) return null;
   const latest = series[series.length - 1];
@@ -204,7 +262,7 @@ export function latestChange(series) {
   return { latest, prev, delta, percent, direction: delta === 0 ? 'flat' : delta > 0 ? 'up' : 'down' };
 }
 
-/** 序列的最值（难度维度：位次最小 = 最难） */
+/** 序列的最值（位次最小 = 最难） */
 export function extremes(series) {
   if (!series || series.length === 0) return { hardest: null, easiest: null };
   let hardest = series[0];
@@ -216,7 +274,7 @@ export function extremes(series) {
   return { hardest, easiest };
 }
 
-/** 序列化：丢掉派生字段，减小缓存体积 */
+/** 序列化：丢掉派生字段 */
 export function serialize(state) {
   return JSON.stringify({
     schemaVersion: STORAGE.schemaVersion,
