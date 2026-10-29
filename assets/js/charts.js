@@ -1,0 +1,358 @@
+﻿/**
+ * 图表渲染：K 线 + 成交量 + 分差 三联图，带联动缩放。
+ *
+ * 视觉口径（与说明页一致）：
+ *   · 个股用「位次」作图，纵轴翻转 —— 第 1 名在最上方，越靠上越难考
+ *   · 大盘/板块用「热度指数」作图 —— 数值越大越难考
+ *   两种模式都满足「向上 = 变难」，红色统一表示"比上一年更难"。
+ */
+
+import { COLORS, DEFAULT_MA } from './config.js';
+import { movingAverage } from './aggregate.js';
+import { formatNumber, round2 } from './utils.js';
+
+const AXIS_TEXT = { color: COLORS.axis, fontSize: 11 };
+
+/** 涨跌配色：candlestick 用 color 表示 close>open，color0 表示 close<open */
+function candleColors(mode) {
+  // rank 模式纵轴翻转：位次变小（更难）在视觉上是"涨"，所以此时 color0 用红
+  return mode === 'rank'
+    ? { color: COLORS.down, color0: COLORS.up, borderColor: COLORS.downBorder, borderColor0: COLORS.upBorder }
+    : { color: COLORS.up, color0: COLORS.down, borderColor: COLORS.upBorder, borderColor0: COLORS.downBorder };
+}
+
+function baseTooltip() {
+  return {
+    backgroundColor: COLORS.tooltipBg,
+    borderColor: COLORS.tooltipBorder,
+    textStyle: { color: '#fff', fontSize: 12 },
+    extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.45); border-radius: 6px;',
+  };
+}
+
+export function createChartController(echarts, elements) {
+  const kline = echarts.init(elements.kline, null, { renderer: 'canvas' });
+  const volume = echarts.init(elements.volume, null, { renderer: 'canvas' });
+  const spread = echarts.init(elements.spread, null, { renderer: 'canvas' });
+
+  const charts = [kline, volume, spread];
+
+  // K 线 / 成交量 之间用官方联动（tooltip + 缩放都同步）；
+  // 分差图年份可能少于主图，只接收 K 线的缩放，避免错位。
+  echarts.connect([kline, volume]);
+  kline.on('dataZoom', (event) => {
+    const batch = event.batch?.length
+      ? { batch: event.batch.map((item) => ({ start: item.start, end: item.end })) }
+      : { start: event.start, end: event.end };
+    spread.dispatchAction({ type: 'dataZoom', ...batch });
+  });
+
+  function maPeriods(config) {
+    const periods = (config ?? DEFAULT_MA).map((value) => {
+      const num = Math.floor(Number(value));
+      return Number.isFinite(num) && num >= 1 ? num : null;
+    });
+    return periods.every((value) => value !== null) ? periods : DEFAULT_MA;
+  }
+
+  function renderKline({ mode, series, title, ma }) {
+    const periods = maPeriods(ma);
+    const dates = series.map((item) => `${item.year}年`);
+    const values = series.map((item) => [item.open, item.close, item.low, item.high]);
+    const colors = candleColors(mode);
+    const inverse = mode === 'rank';
+
+    const legendNames = ['K线', ...periods.map((p) => `MA${p}`)];
+    const maSeries = periods.map((period, index) => ({
+      name: `MA${period}`,
+      type: 'line',
+      data: movingAverage(series, period),
+      smooth: true,
+      symbol: 'none',
+      lineStyle: { width: 1.2, color: COLORS.ma[index] ?? COLORS.ma[0] },
+      itemStyle: { color: COLORS.ma[index] ?? COLORS.ma[0] },
+      z: 3,
+      connectNulls: false,
+    }));
+
+    const hardest = series.reduce((best, item) => (best === null || item.close < best.close ? item : best), null);
+    const easiest = series.reduce((best, item) => (best === null || item.close > best.close ? item : best), null);
+
+    const markPoints = [];
+    if (hardest) {
+      markPoints.push({
+        name: '历年最难',
+        coord: [dates.indexOf(`${hardest.year}年`), hardest.close],
+        value: mode === 'rank' ? formatNumber(hardest.close) : hardest.close.toFixed(1),
+        itemStyle: { color: COLORS.up },
+        label: { fontSize: 10, color: '#fff' },
+      });
+    }
+    if (easiest && (!hardest || easiest.year !== hardest.year)) {
+      markPoints.push({
+        name: '历年最易',
+        coord: [dates.indexOf(`${easiest.year}年`), easiest.close],
+        value: mode === 'rank' ? formatNumber(easiest.close) : easiest.close.toFixed(1),
+        itemStyle: { color: COLORS.down },
+        label: { fontSize: 10, color: '#fff' },
+      });
+    }
+
+    kline.setOption({
+      backgroundColor: 'transparent',
+      animation: false,
+      legend: {
+        top: 8,
+        left: 'center',
+        data: legendNames,
+        textStyle: { color: COLORS.axis, fontSize: 11 },
+        itemWidth: 14,
+        itemHeight: 8,
+        icon: 'roundRect',
+      },
+      tooltip: {
+        ...baseTooltip(),
+        trigger: 'axis',
+        axisPointer: { type: 'cross', lineStyle: { color: '#39496e' }, crossStyle: { color: '#39496e' } },
+        formatter: (params) => formatKlineTooltip(params, series, mode),
+      },
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
+      grid: { left: 64, right: 24, top: 44, bottom: 28 },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        boundaryGap: true,
+        axisLine: { lineStyle: { color: COLORS.grid } },
+        axisLabel: AXIS_TEXT,
+        axisTick: { show: false },
+        splitLine: { show: false },
+      },
+      yAxis: {
+        scale: true,
+        inverse,
+        axisLine: { show: false },
+        axisLabel: {
+          ...AXIS_TEXT,
+          formatter: (value) => (mode === 'rank' ? formatNumber(value) : value.toFixed(1)),
+        },
+        splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } },
+        name: mode === 'rank' ? '位次' : '热度',
+        nameTextStyle: { color: COLORS.axis, fontSize: 11, align: 'right' },
+      },
+      dataZoom: [{ type: 'inside', xAxisIndex: [0], start: 0, end: 100, zoomOnMouseWheel: true }],
+      graphic: title
+        ? [{ type: 'text', left: 66, top: 10, style: { text: title, fill: '#7d8aa3', fontSize: 11 } }]
+        : [],
+      series: [
+        {
+          name: 'K线',
+          type: 'candlestick',
+          data: values,
+          itemStyle: colors,
+          markPoint: {
+            symbol: 'pin',
+            symbolSize: 42,
+            label: { fontSize: 10, color: '#fff' },
+            data: markPoints,
+          },
+          z: 2,
+        },
+        ...maSeries,
+      ],
+    }, true);
+  }
+
+  function renderVolume({ series }) {
+    const dates = series.map((item) => `${item.year}年`);
+    const values = series.map((item) => item.volume ?? 0);
+    const colors = series.map((item, index) => {
+      if (index === 0) return COLORS.neutral;
+      const prev = series[index - 1].volume ?? 0;
+      return item.volume > prev ? COLORS.up : item.volume < prev ? COLORS.down : COLORS.neutral;
+    });
+
+    volume.setOption({
+      backgroundColor: 'transparent',
+      animation: false,
+      tooltip: {
+        ...baseTooltip(),
+        trigger: 'axis',
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.03)' } },
+        formatter: (params) => {
+          const index = params?.[0]?.dataIndex ?? 0;
+          const item = series[index];
+          if (!item) return '';
+          const prev = index > 0 ? series[index - 1].volume ?? 0 : null;
+          const delta = prev === null ? null : item.volume - prev;
+          const lines = [`<b>${item.year} 年</b>`, `招生人数：${formatNumber(item.volume)} 人`];
+          if (delta !== null) {
+            const sign = delta > 0 ? '+' : '';
+            const color = delta > 0 ? COLORS.up : delta < 0 ? COLORS.down : COLORS.neutral;
+            lines.push(`较上年：<span style="color:${color}">${sign}${formatNumber(delta)} 人</span>`);
+          }
+          return lines.join('<br/>');
+        },
+      },
+      grid: { left: 64, right: 24, top: 12, bottom: 6 },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: COLORS.grid } },
+        axisLabel: { show: false },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        axisLine: { show: false },
+        axisLabel: { ...AXIS_TEXT, fontSize: 10, formatter: (value) => formatNumber(value) },
+        splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } },
+        name: '招生',
+        nameTextStyle: { color: COLORS.axis, fontSize: 10, align: 'right' },
+      },
+      dataZoom: [{ type: 'inside', xAxisIndex: [0], start: 0, end: 100 }],
+      series: [{
+        name: '招生人数',
+        type: 'bar',
+        data: values.map((value, index) => ({ value, itemStyle: { color: colors[index] } })),
+        barMaxWidth: 26,
+      }],
+    }, true);
+  }
+
+  function renderSpread({ series }) {
+    const rows = series.filter((item) => Number.isFinite(item.maxScore) && Number.isFinite(item.minScore));
+    if (rows.length === 0) {
+      spread.clear();
+      return false;
+    }
+
+    const dates = rows.map((item) => `${item.year}年`);
+    const lows = rows.map((item) => item.minScore);
+    const diffs = rows.map((item) => round2(item.maxScore - item.minScore));
+    const colors = rows.map((item, index) => {
+      if (index === 0) return COLORS.neutral;
+      const prevDiff = diffs[index - 1];
+      return diffs[index] > prevDiff ? COLORS.up : diffs[index] < prevDiff ? COLORS.down : COLORS.neutral;
+    });
+
+    const allLow = Math.min(...lows);
+    const allHigh = Math.max(...rows.map((item) => item.maxScore));
+    const pad = Math.max(4, Math.round((allHigh - allLow) * 0.12));
+
+    spread.setOption({
+      backgroundColor: 'transparent',
+      animation: false,
+      tooltip: {
+        ...baseTooltip(),
+        trigger: 'axis',
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.03)' } },
+        formatter: (params) => {
+          const index = params?.[0]?.dataIndex ?? 0;
+          const item = rows[index];
+          if (!item) return '';
+          return [
+            `<b>${item.year} 年</b>`,
+            `最高专业最低分：${item.maxScore}`,
+            `最低专业最低分：${item.minScore}`,
+            `分差：${diffs[index]} 分`,
+          ].join('<br/>');
+        },
+      },
+      grid: { left: 64, right: 24, top: 12, bottom: 6 },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLine: { lineStyle: { color: COLORS.grid } },
+        axisLabel: { show: false },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        min: Math.floor(allLow - pad),
+        max: Math.ceil(allHigh + pad),
+        axisLine: { show: false },
+        axisLabel: { ...AXIS_TEXT, fontSize: 10 },
+        splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } },
+        name: '分数',
+        nameTextStyle: { color: COLORS.axis, fontSize: 10, align: 'right' },
+      },
+      dataZoom: [{ type: 'inside', xAxisIndex: [0], start: 0, end: 100 }],
+      series: [
+        {
+          name: '基准',
+          type: 'bar',
+          stack: 'spread',
+          silent: true,
+          itemStyle: { color: 'transparent', borderColor: 'transparent' },
+          emphasis: { itemStyle: { color: 'transparent', borderColor: 'transparent' } },
+          data: lows,
+          barMaxWidth: 26,
+        },
+        {
+          name: '分差区间',
+          type: 'bar',
+          stack: 'spread',
+          data: diffs.map((value, index) => ({ value, itemStyle: { color: colors[index] } })),
+          barMaxWidth: 26,
+          itemStyle: { borderRadius: [3, 3, 0, 0] },
+          label: {
+            show: true,
+            position: 'top',
+            formatter: (params) => `${params.value}分`,
+            color: COLORS.axis,
+            fontSize: 10,
+          },
+        },
+      ],
+    }, true);
+    return true;
+  }
+
+  function formatKlineTooltip(params, series, mode) {
+    const index = params?.[0]?.dataIndex ?? 0;
+    const item = series[index];
+    if (!item) return '';
+    const rows = [`<b>${item.year} 年</b>`];
+
+    if (mode === 'rank') {
+      rows.push(`开盘位次：${formatNumber(item.open)}`);
+      rows.push(`收盘位次：${formatNumber(item.close)}`);
+      rows.push(`最好位次：${formatNumber(item.best ?? item.low)}`);
+      rows.push(`最差位次：${formatNumber(item.worst ?? item.high)}`);
+    } else {
+      rows.push(`热度指数：<b>${item.close.toFixed(2)}</b>`);
+      if (Number.isFinite(item.rank)) rows.push(`加权平均位次：${formatNumber(item.rank)}`);
+      if (Number.isFinite(item.percentile)) rows.push(`百分位：${item.percentile.toFixed(2)}%`);
+      if (Number.isFinite(item.candidates)) {
+        const suffix = item.candidatesKnown === false ? '（估算）' : '';
+        rows.push(`考生总数：${formatNumber(item.candidates)}${suffix}`);
+      }
+    }
+
+    rows.push(`招生人数：${formatNumber(item.volume)} 人`);
+    if (Number.isFinite(item.maxHighScore)) rows.push(`最高分：${item.maxHighScore}`);
+    if (Number.isFinite(item.maxScore)) rows.push(`最高专业最低分：${item.maxScore}`);
+    if (Number.isFinite(item.minScore)) rows.push(`最低专业最低分：${item.minScore}`);
+    return rows.join('<br/>');
+  }
+
+  /** 渲染全部；返回分差图是否有数据（用于决定是否收起该图） */
+  function render({ mode, series, title, ma }) {
+    if (!series || series.length === 0) {
+      charts.forEach((chart) => chart.clear());
+      return { hasSpread: false };
+    }
+    renderKline({ mode, series, title, ma });
+    renderVolume({ series });
+    const hasSpread = renderSpread({ series });
+    return { hasSpread };
+  }
+
+  function clear() {
+    charts.forEach((chart) => chart.clear());
+  }
+
+  function resize() {
+    charts.forEach((chart) => chart.resize());
+  }
+
+  return { render, clear, resize, kline, volume, spread };
+}

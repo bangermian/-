@@ -1,0 +1,14 @@
+# 统一换行符：GitHub Pages 部署的是 LF，Windows 批处理必须是 CRLF
+* text=auto eol=lf
+
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# 二进制，禁止换行符转换
+*.xlsx binary
+*.xls binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

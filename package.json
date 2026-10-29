@@ -1,0 +1,15 @@
+{
+  "name": "gaokaoshun",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "高考顺 · 把高考录取位次当作股票 K 线来分析",
+  "license": "MIT",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node tools/verify.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

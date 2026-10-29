@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>使用说明 · 高考顺</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <link rel="stylesheet" href="assets/css/help.css">
+</head>
+<body class="doc">
+  <header class="doc-header">
+    <div class="logo">📖 高考顺 · 使用说明</div>
+    <a href="index.html">← 返回应用</a>
+  </header>
+
+  <main class="doc-main">
+    <h1>把录取位次当股票看</h1>
+    <p class="subtitle">核心指标是<strong>位次</strong>而不是分数 —— 位次不受试卷难度影响，跨年可比。</p>
+
+    <h2>1. 核心概念</h2>
+    <p>系统把高考录取数据对标股票 K 线：一所院校（或一个专业）就是一只股票，每年的录取位次就是价格。</p>
+    <ul>
+      <li><strong>个股</strong>：某所院校在某省招生的历年位次走势</li>
+      <li><strong>板块</strong>：同一地区 / 同一层次（92、双一流、S11 等）院校的整体表现</li>
+      <li><strong>大盘</strong>：某个大区（东部、中部等）的整体竞争激烈程度</li>
+    </ul>
+    <div class="callout">
+      <strong>位次越小越难考。</strong>所以个股图的纵轴是翻转的：第 1 名在最上方，"向上"= 变得更难考。
+    </div>
+
+    <h2>2. 数据文件格式</h2>
+    <h3>文件夹结构</h3>
+    <p>按<strong>学校所在地</strong>分文件夹存放，系统会递归读取子文件夹，并支持多次加载不同省份的文件夹（数据自动合并）。</p>
+    <pre><code>data/
+├── 天津/
+│   ├── 2024 天津 天津工业大学 doublefirst 70800.xlsx
+│   └── 2025 天津 天津工业大学 doublefirst 74000.xlsx
+└── 浙江/
+    ├── 2024 天津 温州肯恩大学 s11 70800.xlsx
+    └── 2025 天津 温州肯恩大学 s11 74000.csv</code></pre>
+    <p>一级文件夹名即"学校所在地"，用于地区板块聚合。</p>
+
+    <h3>文件名规范</h3>
+    <pre><code>年份 招生省份 院校名称 板块 考生数.xlsx</code></pre>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>字段</th><th>是否必填</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>年份</td><td>必填</td><td>4 位数字，如 <code>2025</code></td></tr>
+          <tr><td>招生省份</td><td>必填</td><td>该院校在哪个省招生，如 <code>天津</code></td></tr>
+          <tr><td>院校名称</td><td>必填</td><td>如 <code>天津工业大学</code>，允许包含空格</td></tr>
+          <tr><td>板块</td><td>可选</td><td><code>92</code> / <code>doublefirst</code> / <code>newresearch</code> / <code>s11</code> / <code>shuangfei</code>；缺省按双非处理</td></tr>
+          <tr><td>考生数</td><td>可选</td><td>该招生省份当年考生总数，用于把位次换算成百分位</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>表格内容</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>列名</th><th>是否必填</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>专业名称</td><td>必填</td><td>如 <code>计算机科学与技术</code></td></tr>
+          <tr><td>最低位次</td><td>必填</td><td>该专业录取的最低位次（靠后）</td></tr>
+          <tr><td>最高位次</td><td>建议填</td><td>缺省时自动用最低位次填充</td></tr>
+          <tr><td>最高分 / 最低分</td><td>建议填</td><td>缺一补一；都缺则隐藏"分差图"</td></tr>
+          <tr><td>录取人数</td><td>建议填</td><td>缺省按 0 处理（聚合时权重退化为等权）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>支持 <code>.xlsx</code> / <code>.xls</code> / <code>.csv</code>。CSV 会自动识别 UTF-8 与 GB18030 编码。表头不必在第一行，系统会向下扫描最多 12 行自动定位表头。</p>
+
+    <h2>3. 计算公式</h2>
+    <h3>专业平均位次</h3>
+    <p><code>(最高位次 + 最低位次) ÷ 2</code></p>
+
+    <h3>院校收盘位次</h3>
+    <p><code>Σ(专业平均位次 × 该专业录取人数) ÷ Σ(录取人数)</code></p>
+
+    <h3>开盘位次</h3>
+    <p><code>上一年的收盘位次</code>；首年开盘 = 当年收盘。</p>
+
+    <h3>上下影线</h3>
+    <p>上影线取当年所有专业里<strong>最好</strong>的位次，下影线取<strong>最差</strong>的位次。</p>
+
+    <h3>百分位与热度指数</h3>
+    <p><code>百分位 = 加权平均位次 ÷ 该区域考生总数 × 100</code><br>
+       <code>热度指数 = 100 - 百分位</code></p>
+    <div class="callout">
+      <strong>分母的算法：</strong>每个招生省份的考生数按「省份 × 年份」分别记录；大区则把成员省份的考生数相加。
+      旧版本只取第一个文件里的考生数当全局分母，跨省、跨年都会算错，这一版已修正。
+      分数缺失考生数时使用 70000 兜底，并在悬浮提示里标注"估算"。
+    </div>
+    <p>热度指数越大 → 该区域/板块整体越难考。个股与指数的图形都满足"向上 = 变难"。</p>
+
+    <h2>4. 怎么看 K 线</h2>
+    <div class="kline-demo">
+      <span><span class="swatch red">红</span> 比上一年<strong>更难</strong>（位次下降 / 热度上升）</span>
+      <span><span class="swatch green">绿</span> 比上一年<strong>更易</strong>（位次上升 / 热度下降）</span>
+    </div>
+    <ul>
+      <li><strong>实体</strong>：开盘到收盘的区间，实体越长说明当年变化越大</li>
+      <li><strong>影线</strong>：当年最好 / 最差的位次</li>
+      <li><strong>成交量柱</strong>：当年招生总人数，红=扩招，绿=缩招</li>
+      <li><strong>均线 MA</strong>：近 N 年的收盘均值，判断长期趋势；周期可在左侧面板改</li>
+      <li><strong>图钉标记</strong>：标出历年最难（红）与历年最易（绿）的年份</li>
+      <li><strong>分差图</strong>：最高专业最低分与最低专业最低分的差值，反映校内专业冷热差距</li>
+    </ul>
+
+    <h2>5. 走势解读</h2>
+    <ul>
+      <li><strong>连续红柱</strong> → 录取难度逐年上升，竞争加剧</li>
+      <li><strong>连续绿柱</strong> → 难度下降，报考更容易</li>
+      <li><strong>K 线在均线上方</strong> → 当前难度高于长期平均</li>
+      <li><strong>MA5 上穿 MA20（金叉）</strong> → 短期难度抬升，可能启动上升趋势</li>
+      <li><strong>MA5 下穿 MA20（死叉）</strong> → 热度走弱</li>
+      <li><strong>量价背离</strong>：位次上升但招生人数大幅缩减 → 热度可能靠"饥饿营销"虚高，需警惕</li>
+    </ul>
+
+    <h2>6. 操作提示</h2>
+    <ul>
+      <li>点「📁 加载文件夹」选数据根目录，系统递归读取全部 Excel/CSV</li>
+      <li>切换「大盘 / 板块 / 个股」查看不同维度，三张图联动缩放</li>
+      <li>个股页输入院校与招生省份 → 点「加载个股」；下拉可切到单个专业</li>
+      <li>均线周期（MA1~MA4）改动后自动重绘，设置会记住</li>
+      <li>「📤 导出当前个股」支持纵向专业格式 / 横向年份格式</li>
+      <li>「📤 导出全部」把每所院校导成一个工作表</li>
+      <li>数据与手录记录自动存到浏览器本地（IndexedDB），刷新不丢；点「🗑 清空」可清除</li>
+    </ul>
+
+    <h2>7. 常见问题</h2>
+    <div class="faq">
+      <details>
+        <summary>双击 index.html 打开是白屏 / 只在顶部提示？</summary>
+        <p>本项目用 ES Module 组织代码，浏览器禁止在 <code>file://</code> 下加载模块。请双击项目根目录的 <code>启动.cmd</code>，或访问 GitHub Pages 在线版。</p>
+      </details>
+      <details>
+        <summary>加载后提示"文件名不规范"？</summary>
+        <p>文件名必须至少包含「年份 招生省份 院校」三段，用空格分隔，例如 <code>2025 天津 天津工业大学.xlsx</code>。板块与考生数可省略。控制台（F12）会列出每一个被跳过的文件及原因。</p>
+      </details>
+      <details>
+        <summary>图表区域一片空白，但数据列表有数据？</summary>
+        <p>通常是图表库没加载成功。检查网络，或把 <code>echarts.min.js</code>、<code>xlsx.full.min.js</code> 放进项目根目录的 <code>vendor/</code> 文件夹，页面会优先使用本地副本。</p>
+      </details>
+      <details>
+        <summary>为什么"大盘/板块"不能手动录入？</summary>
+        <p>因为大盘与板块是<strong>聚合结果</strong>，由个股数据自动算出。手动录入会和自动值互相覆盖，所以旧版那两个表单已被移除；要修正数据请到「个股」页手动录入。</p>
+      </details>
+      <details>
+        <summary>同一个文件夹加载两次会重复吗？</summary>
+        <p>不会。写入以「院校 + 专业 + 年份」为唯一键，重复加载是幂等的（覆盖更新）。</p>
+      </details>
+    </div>
+  </main>
+</body>
+</html>

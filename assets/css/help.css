@@ -1,0 +1,178 @@
+/* 说明页专用排版（与 style.css 配合使用） */
+
+body.doc {
+  display: block;
+  overflow: auto;
+  grid-template-rows: none;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.85;
+  font-size: 15px;
+  padding: 0 0 80px;
+}
+
+.doc-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 24px;
+  background: rgba(22, 33, 62, 0.94);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+}
+
+.doc-header .logo { font-size: 16px; }
+
+.doc-header a {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 5px 12px;
+}
+
+.doc-header a:hover { color: var(--text); border-color: var(--border); }
+
+.doc-main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 24px 0;
+}
+
+.doc-main h1 {
+  font-size: 26px;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+
+.doc-main .subtitle {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin-bottom: 32px;
+}
+
+.doc-main h2 {
+  font-size: 19px;
+  color: #fff;
+  margin: 40px 0 14px;
+  padding-left: 12px;
+  border-left: 4px solid var(--up);
+}
+
+.doc-main h3 {
+  font-size: 15px;
+  color: var(--accent);
+  margin: 24px 0 8px;
+}
+
+.doc-main p { margin: 10px 0; color: #cfd7e6; }
+
+.doc-main ul,
+.doc-main ol { margin: 10px 0 10px 22px; padding: 0; }
+
+.doc-main li { margin: 5px 0; color: #cfd7e6; }
+
+.doc-main code {
+  background: var(--panel-soft);
+  border: 1px solid var(--border-soft);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #ffd479;
+}
+
+.doc-main pre {
+  background: #0b1a33;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+
+.doc-main pre code { background: none; border: none; padding: 0; color: #cfe3ff; }
+
+.callout {
+  background: rgba(243, 156, 18, 0.08);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+
+.callout strong { color: var(--accent); }
+
+.table-wrap { overflow-x: auto; margin: 14px 0; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  min-width: 520px;
+}
+
+th, td {
+  border: 1px solid var(--border-soft);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th { background: var(--panel); color: #fff; font-weight: 600; }
+td { color: #cfd7e6; }
+tbody tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
+
+.kline-demo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 24px;
+  align-items: center;
+  margin: 14px 0;
+  font-size: 14px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  line-height: 26px;
+  text-align: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.swatch.red { background: var(--up); }
+.swatch.green { background: var(--down); }
+
+.faq { margin-top: 12px; }
+.faq details {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 0 14px;
+  margin-bottom: 10px;
+  background: rgba(11, 26, 51, 0.4);
+}
+
+.faq summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-size: 14px;
+  color: #fff;
+  list-style: none;
+}
+
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::before { content: "Q  "; color: var(--accent); font-weight: 700; }
+.faq details[open] summary { border-bottom: 1px solid var(--border-soft); }
+.faq details p { padding-bottom: 10px; }
+
+@media (max-width: 640px) {
+  .doc-main { padding: 20px 16px 0; }
+  .doc-main h1 { font-size: 21px; }
+}
