@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "高考顺 · 数据采集器",
+  "version": "2.1.0",
+  "description": "抓取掌上高考院校分数线与任意网页表格（含一分一段表），导出高考顺可直接加载的 CSV",
+  "content_scripts": [
+    {
+      "matches": ["*://*/*"],
+      "js": ["collector.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

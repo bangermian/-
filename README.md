@@ -173,10 +173,28 @@ npm start
 
 ### 安装
 
-1. 浏览器装 [Tampermonkey](https://www.tampermonkey.net/)
+有两种装法，**扩展版更省事**（不用商店、不用登录、不联网）。
+
+#### 方式一：本地扩展（推荐）
+
+1. 双击项目根目录的 **`安装扩展.cmd`**
+2. 在打开的 `chrome://extensions` 里打开右上角「开发者模式」
+3. 点「加载已解压的扩展程序」，选中 `tools\extension` 文件夹
+
+刷新任意网页，右下角出现「高考顺 · 采集器」即成功。Chrome 重启后依然生效
+（每次启动会提示"停用开发者模式扩展"，点忽略即可）。
+
+> 为什么不能一键装：Chrome 137 起禁用了命令行 `--load-extension`，
+> 商店之外的扩展只能由用户在扩展管理页手动加载。
+
+#### 方式二：Tampermonkey
+
+1. 浏览器装 [Tampermonkey](https://www.tampermonkey.net/)（需能访问扩展商店）
 2. 扩展图标 → 添加新脚本 → 清空 → 粘贴 `tools/gaokao-exporter.user.js` 全文 → 保存
 3. 打开任意 `https://www.gaokao.cn/school/<id>/special` 页面，右下角出现面板
-4. 抓别的网站时，面板默认收起，点「展开」即可
+
+两个版本跑的是同一份代码：扩展的 `collector.js` 由
+`node tools/build-extension.mjs` 从用户脚本生成，改一处即可。
 
 ### 已知限制（不隐藏）
 
