@@ -9,7 +9,7 @@
 
 import { buildMajorSeries, detectOutliers, toCandles } from './aggregate.js';
 import { createChartController } from './charts.js';
-import { ACCEPTED_EXT, DEFAULT_MA, REGION_LABELS, PLATE_LABELS, REGIONS } from './config.js';
+import { ACCEPTED_EXT, DEFAULT_MA, REGION_LABELS, PLATE_LABELS, REGIONS, regionOfProvince } from './config.js';
 import { computeIndices } from './indices.js';
 import { parseWorkbookFile } from './parser.js';
 import {
@@ -272,6 +272,38 @@ function renderMarketTab() {
   renderDataList('market-data-list', seriesRows(series), null);
 }
 
+/**
+ * 「学校所在地 / 所属区域」联动。
+ * 选定省份时区域自动跳到该省所属区域并禁用（此时按省份聚合，区域不起作用）；
+ * 换区域时若当前省份不属于该区域，就把省份退回「全部省份」。
+ */
+function syncPlateFilters(source) {
+  const provinceEl = $('plate-province');
+  const regionEl = $('plate-region');
+  if (!provinceEl || !regionEl) return;
+
+  const province = provinceEl.value;
+
+  if (source === 'province') {
+    if (province === 'all') {
+      regionEl.disabled = false;
+    } else {
+      const region = regionOfProvince(province);
+      if (region) regionEl.value = region;
+      regionEl.disabled = true;
+    }
+    return;
+  }
+
+  if (source === 'region') {
+    // 区域换了之后，原来选中的省份如果不属于新区域，就退回全部省份
+    if (province !== 'all' && regionOfProvince(province) !== regionEl.value) {
+      provinceEl.value = 'all';
+      regionEl.disabled = false;
+    }
+  }
+}
+
 function renderPlateTab() {
   const location = $('plate-province')?.value ?? 'all';
   const region = $('plate-region')?.value ?? 'east';
@@ -286,12 +318,47 @@ function renderPlateTab() {
   const name = series.length ? parts.join(' · ') : `${parts.join(' · ')}（暂无数据）`;
 
   const hint = series.length ? null
-    : `「${parts.join(' · ')}」没有数据。<br>
-       当前数据里没有同时满足这个「所在地 + 板块」组合的院校。`
-      + `<br>试试把「学校所在地」改成「全部省份」，或者换个板块。`;
+    : location === 'all'
+      ? `「${parts.join(' · ')}」没有数据。<br>当前数据里没有位于该区域的院校，换个区域试试。`
+      : `「${parts.join(' · ')}」没有数据。<br>当前数据里没有所在地为「${location}」的院校，把「学校所在地」改成「全部省份」再试。`;
 
   renderHeatView(name, series, hint);
   renderDataList('plate-data-list', seriesRows(series), null);
+}
+
+/**
+ * 个股页：校名 / 招生省份变化时，把「所属板块」同步成该校真实的板块。
+ * 只填了校名且能唯一确定省份时，顺手把省份补上。
+ */
+function syncStockMeta() {
+  const schoolEl = $('stock-school');
+  const provinceEl = $('stock-province');
+  const plateEl = $('stock-plate');
+  const school = (schoolEl?.value ?? '').trim();
+  let province = (provinceEl?.value ?? '').trim();
+
+  if (school) {
+    // 当前省份在这个校名下找不到时，才用唯一匹配的省份兜底——
+    // 用户手动改过的省份只要有效就不动它
+    const existing = province ? state.schools[schoolKey(school, province)] : null;
+    if (!existing) {
+      const provinces = [...new Set(
+        Object.values(state.schools)
+          .filter((item) => item.school === school)
+          .map((item) => item.province),
+      )];
+      if (provinces.length === 1) {
+        province = provinces[0];
+        if (provinceEl) provinceEl.value = province;
+      }
+    }
+  }
+
+  if (!school || !province) return null;
+  const item = state.schools[schoolKey(school, province)];
+  if (!item) return null;
+  if (plateEl && item.plate && plateEl.value !== item.plate) plateEl.value = item.plate;
+  return item;
 }
 
 function renderStockTab() {
@@ -323,6 +390,10 @@ function renderStockTab() {
   const majors = listMajors(item);
   setMajorOptions(majors, view.major);
   if (view.major !== '__all__' && !majors.includes(view.major)) view.major = '__all__';
+
+  // 板块下拉跟着院校走，不用手动选
+  const plateEl = $('stock-plate');
+  if (plateEl && item.plate && plateEl.value !== item.plate) plateEl.value = item.plate;
 
   const series = view.major === '__all__'
     ? item.series
@@ -992,7 +1063,15 @@ function bindEvents() {
   });
 
   ['marketSelect'].forEach((id) => $(id)?.addEventListener('change', renderMarketTab));
-  ['plate-province', 'plate-region', 'plate-type'].forEach((id) => $(id)?.addEventListener('change', renderPlateTab));
+  $('plate-province')?.addEventListener('change', () => { syncPlateFilters('province'); renderPlateTab(); });
+  $('plate-region')?.addEventListener('change', () => { syncPlateFilters('region'); renderPlateTab(); });
+  $('plate-type')?.addEventListener('change', renderPlateTab);
+
+  // 校名/省份一改，板块下拉就跟着变
+  ['stock-school', 'stock-province'].forEach((id) => {
+    $(id)?.addEventListener('input', syncStockMeta);
+    $(id)?.addEventListener('change', syncStockMeta);
+  });
   $('majorSelect')?.addEventListener('change', (event) => {
     view.major = event.target.value;
     renderStockTab();
@@ -1061,6 +1140,7 @@ async function boot() {
     refreshIndices();
     refreshLocationOptions();
     refreshSchoolOptions();
+    syncPlateFilters('province');
     renderActive();
     const when = state.savedAt ? new Date(state.savedAt).toLocaleString('zh-CN') : '';
     const schools = Object.keys(state.schools).length;

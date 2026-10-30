@@ -24,6 +24,25 @@ export const REGION_LABELS = {
   northwest: '西北指数',
 };
 
+/**
+ * 省份 → 所属区域。找不到就返回 null（比如「待定」或没登记的省份）。
+ * @param {string} province
+ * @returns {string|null}
+ */
+export function regionOfProvince(province) {
+  const name = String(province ?? '').trim();
+  if (!name) return null;
+  for (const [region, list] of Object.entries(REGIONS)) {
+    if (list.includes(name)) return region;
+  }
+  return null;
+}
+
+/** 区域 → 它包含的省份（未知区域返回空数组） */
+export function provincesOfRegion(region) {
+  return REGIONS[region] ?? [];
+}
+
 /** 院校板块枚举，顺序即下拉顺序 */
 export const PLATES = ['92', 'doublefirst', 'newresearch', 's11', 'shuangfei'];
 

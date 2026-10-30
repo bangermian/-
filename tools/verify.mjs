@@ -9,6 +9,7 @@ import {
   attachPercentiles, detectOutliers, movingAverage, quantile, toCandles, yearlyAggregate,
 } from '../assets/js/aggregate.js';
 import { computeIndices } from '../assets/js/indices.js';
+import { platesOf, regionOfProvince, provincesOfRegion } from '../assets/js/config.js';
 import {
   normalizePlate, parseAggregateRows, parseCandidatesRows, parseFileName, parseSegmentRows, parseSheetRows,
 } from '../assets/js/parser.js';
@@ -236,6 +237,17 @@ test('基准线：同省同板块的平均百分位', () => {
   assert.equal(benchmarks['天津|doublefirst'][0].percentile, 14.29);
   assert.equal(benchmarks['天津|s11'][0].percentile, 28.57);
   assert.equal(benchmarks['浙江|s11'][0].percentile, 60);
+});
+
+test('省份 → 区域：联动下拉靠它', () => {
+  assert.equal(regionOfProvince('天津'), 'east');
+  assert.equal(regionOfProvince('山东'), 'jiaodong');
+  assert.equal(regionOfProvince('黑龙江'), 'northeast');
+  assert.equal(regionOfProvince(' 浙江 '), 'east');
+  assert.equal(regionOfProvince('待定'), null);
+  assert.equal(regionOfProvince(''), null);
+  assert.deepEqual(provincesOfRegion('jiaodong'), ['山东']);
+  assert.deepEqual(provincesOfRegion('unknown'), []);
 });
 
 test('板块是标签：985/211 同时属于 92 和双一流', () => {
