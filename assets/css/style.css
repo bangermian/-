@@ -534,3 +534,54 @@ select:focus {
   .info-bar { gap: 6px 18px; }
   .info-item .value { font-size: 13px; }
 }
+
+/* ---------- 粘贴导入 ---------- */
+.modal-box--wide { max-width: 680px; }
+
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: #0b1a33;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: var(--up);
+  box-shadow: 0 0 0 3px rgba(236, 0, 0, 0.12);
+}
+
+textarea::placeholder { color: var(--text-faint); }
+
+.paste-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(11, 26, 51, 0.6);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.7;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.paste-preview b { color: var(--accent); }
+
+.paste-accumulate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.paste-accumulate input { width: auto; margin: 0; }

@@ -18,6 +18,8 @@ export function createState() {
     provinceCandidates: {},
     // 一分一段表：{ 省份: { 年份: [{score, cumulative}] } }，按分数降序
     segments: {},
+    // 招生计划：{ 院校key: { 年份: 计划人数 } }，来自粘贴导入
+    plans: {},
   };
 }
 
@@ -35,6 +37,14 @@ export function rebuildSchool(state, key) {
   const item = state.schools[key];
   if (!item) return null;
   item.series = buildSchoolSeries(item.majors, candidatesFor(state, item.province));
+
+  // 有招生计划就覆盖成交量（分数线接口给不出人数，计划是更准的来源）
+  const plans = state.plans?.[key];
+  if (plans) {
+    for (const candle of item.series) {
+      if (Number.isFinite(plans[candle.year])) candle.volume = plans[candle.year];
+    }
+  }
   return item.series;
 }
 
@@ -113,6 +123,42 @@ export function listSegments(state) {
     }
   }
   return out.sort((a, b) => a.province.localeCompare(b.province, 'zh-CN') || a.year - b.year);
+}
+
+/**
+ * 写入招生计划（来自粘贴导入）。
+ * @param {Array<{school:string, province:string, year:number, plan:number}>} list
+ * @returns {{written:number, missing:string[]}}
+ */
+export function applyPlanRecords(state, list) {
+  const touched = new Set();
+  const missing = [];
+  let written = 0;
+
+  for (const item of list ?? []) {
+    const school = String(item?.school ?? '').trim();
+    const province = String(item?.province ?? '').trim();
+    if (!school || !province || !Number.isFinite(item.year) || !Number.isFinite(item.plan)) continue;
+
+    const key = schoolKey(school, province);
+    if (!state.schools[key]) {
+      if (!missing.includes(school)) missing.push(school);
+      continue;
+    }
+    const byYear = state.plans[key] ?? (state.plans[key] = {});
+    byYear[item.year] = Math.round(item.plan);
+    touched.add(key);
+    written += 1;
+  }
+
+  for (const key of touched) rebuildSchool(state, key);
+  return { written, missing };
+}
+
+/** 某校某年的计划人数（没有则 null） */
+export function planFor(state, key, year) {
+  const value = state.plans?.[key]?.[year];
+  return Number.isFinite(value) ? value : null;
 }
 
 /** 确保院校存在，返回其对象 */
@@ -366,6 +412,7 @@ export function serialize(state) {
     savedAt: Date.now(),
     provinceCandidates: state.provinceCandidates,
     segments: state.segments,
+    plans: state.plans,
     schools: Object.fromEntries(
       Object.entries(state.schools).map(([key, item]) => [key, {
         name: item.name,
@@ -393,6 +440,7 @@ export function deserialize(raw) {
   const state = createState();
   state.provinceCandidates = parsed.provinceCandidates ?? {};
   state.segments = parsed.segments ?? {};
+  state.plans = parsed.plans ?? {};
   for (const [key, item] of Object.entries(parsed.schools ?? {})) {
     state.schools[key] = {
       name: item.name,

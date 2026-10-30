@@ -13,9 +13,11 @@ import {
   normalizePlate, parseAggregateRows, parseCandidatesRows, parseFileName, parseSegmentRows, parseSheetRows,
 } from '../assets/js/parser.js';
 import {
-  addMajorRecord, applyCandidateRecords, applyRecords, applyParsedFile, applySegmentRecords,
-  countMissingCandidates, countRecords, createState, deserialize, rankForScore, removeYear, serialize,
+  addMajorRecord, applyCandidateRecords, applyParsedFile, applyPlanRecords, applyRecords,
+  applySegmentRecords, countMissingCandidates, countRecords, createState, deserialize,
+  rankForScore, removeYear, serialize,
 } from '../assets/js/state.js';
+import { parsePastedTable, sumPlan } from '../assets/js/paste.js';
 
 let passed = 0;
 const cases = [];
@@ -409,6 +411,56 @@ test('缓存里保留一分一段表', () => {
   applySegmentRecords(state, [{ province: '天津', year: 2025, score: 680, cumulative: 300 }]);
   const restored = deserialize(serialize(state));
   assert.equal(rankForScore(restored, '天津', 2025, 680), 300);
+});
+
+/* ------------------------------ 粘贴导入 ------------------------------ */
+
+const PLAN_PASTE = `专业名称\t计划招生\t学制/学费
+工科试验班\t81\t四年/5800元
+工科试验班\t69\t四年/5800元
+建筑类\t30\t五年/5000元`;
+
+test('粘贴：认出招生计划并按专业合计', () => {
+  const { kind, rows } = parsePastedTable(PLAN_PASTE);
+  assert.equal(kind, 'plan');
+  assert.equal(rows.length, 3);
+  assert.equal(sumPlan(rows), 180);
+});
+
+test('粘贴：认出一分一段表', () => {
+  const text = '分数\t人数\t累计人数\n680-750\t656\t656\n679\t66\t722';
+  const { kind, rows } = parsePastedTable(text);
+  assert.equal(kind, 'segment');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].score, 680);
+  assert.equal(rows[1].cumulative, 722);
+});
+
+test('粘贴：认出分数数据（含 分数/位次 合并列）', () => {
+  const text = '专业名称\t最低分/最低位次\n计算机\t670/1301\n法学\t664/1828';
+  const { kind, rows } = parsePastedTable(text);
+  assert.equal(kind, 'score');
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].lowScore, 670);
+  assert.equal(rows[0].lowRank, 1301);
+});
+
+test('粘贴：认不出表头时明确报错而不是瞎猜', () => {
+  const { kind, warnings } = parsePastedTable('随便写点\t没用的\n内容\t在这');
+  assert.equal(kind, 'unknown');
+  assert.ok(warnings.length > 0);
+});
+
+test('招生计划写入后覆盖成交量', () => {
+  const state = createState();
+  applyRecords(state, [{
+    year: 2025, school: 'S', province: '天津', location: '天津', plate: 's11',
+    major: '院校最低线', highRank: 100, lowRank: 200, volume: 0,
+  }]);
+  assert.equal(state.schools['S_天津'].series[0].volume, 0);
+  const result = applyPlanRecords(state, [{ school: 'S', province: '天津', year: 2025, plan: 180 }]);
+  assert.equal(result.written, 1);
+  assert.equal(state.schools['S_天津'].series[0].volume, 180);
 });
 
 /* ------------------------------ 稳健分差 / 录取率 / 断档 ------------------------------ */

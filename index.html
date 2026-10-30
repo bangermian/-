@@ -34,6 +34,7 @@
     <div class="header-actions">
       <button class="btn btn-primary" id="btnLoad">📁 加载文件夹</button>
       <button class="btn" id="btnTemplate" title="下载数据填写模板">📄 模板</button>
+      <button class="btn" id="btnPaste" title="把网页上复制的表格粘进来">📋 粘贴导入</button>
       <button class="btn" id="btnExportAll">📤 导出全部</button>
       <button class="btn btn-ghost" id="btnClear" title="清空浏览器本地缓存的数据">🗑 清空</button>
       <input type="file" id="folderInput" accept=".xlsx,.xls,.csv" multiple hidden>
@@ -196,6 +197,31 @@
       </div>
     </section>
   </main>
+
+  <!-- 粘贴导入弹窗 -->
+  <div class="modal-overlay" id="pasteModal" hidden>
+    <div class="modal-box modal-box--wide" role="dialog" aria-modal="true" aria-labelledby="pasteTitle">
+      <h3 id="pasteTitle">📋 粘贴导入</h3>
+      <p class="hint" style="margin:0 0 12px;">
+        在网页上选中表格 → Ctrl+C → 粘到下面。表头含「计划招生」→ 按招生计划合计；含「累计人数」→ 按一分一段导入；否则按分数数据导入。
+      </p>
+      <textarea id="pasteText" rows="7" placeholder="在这里粘贴表格内容（Ctrl+V）"></textarea>
+      <div class="field-row" style="margin-top:10px;">
+        <div class="field"><label for="pasteYear">年份</label><input type="number" id="pasteYear" placeholder="2025"></div>
+        <div class="field"><label for="pasteProvince">招生省份</label><input type="text" id="pasteProvince" placeholder="天津"></div>
+        <div class="field"><label for="pasteSchool">院校名称</label><input type="text" id="pasteSchool" placeholder="导入计划时必填"></div>
+      </div>
+      <div class="paste-preview" id="pastePreview">粘贴后这里会显示识别结果</div>
+      <label class="paste-accumulate">
+        <input type="checkbox" id="pasteAccumulate">
+        累加到该年（分页表格需要分多次粘贴时勾上；否则覆盖）
+      </label>
+      <div class="btn-row">
+        <button class="btn btn-secondary" id="btnPasteCancel">取消</button>
+        <button class="btn btn-primary" id="btnPasteConfirm">导入</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 导出弹窗 -->
   <div class="modal-overlay" id="exportModal" hidden>

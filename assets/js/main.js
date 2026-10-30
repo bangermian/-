@@ -13,9 +13,11 @@ import { ACCEPTED_EXT, DEFAULT_MA, REGION_LABELS, PLATE_LABELS, REGIONS } from '
 import { computeIndices } from './indices.js';
 import { parseWorkbookFile } from './parser.js';
 import {
-  addMajorRecord, applyParsedFile, countMissingCandidates, countRecords, createState, deserialize,
-  listLocations, listMajors, listSchools, removeYear, schoolKey, serialize,
+  addMajorRecord, applyParsedFile, applyPlanRecords, applyRecords, applySegmentRecords,
+  countMissingCandidates, countRecords, createState, deserialize,
+  listLocations, listMajors, listSchools, planFor, removeYear, schoolKey, serialize,
 } from './state.js';
+import { parsePastedTable, sumPlan } from './paste.js';
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './storage.js';
 import { formatNumber, formatPercent, round2, safeFilename } from './utils.js';
 import {
@@ -741,12 +743,144 @@ function downloadTemplate() {
   toast('模板已下载：填好「分数数据」表即可直接加载', 'ok');
 }
 
+/* ============================ 粘贴导入 ============================ */
+
+/**
+ * 掌上高考的招生计划分页控件无法被脚本驱动，但**人能看到、能复制**。
+ * 所以开一条"复制 → 粘贴"的通道：粘什么，就解析什么。
+ */
+function openPasteModal() {
+  const { school, province } = stockEntry();
+  const yearEl = $('pasteYear');
+  const provEl = $('pasteProvince');
+  const schoolEl = $('pasteSchool');
+  if (yearEl && !yearEl.value) yearEl.value = String(new Date().getFullYear());
+  if (provEl && !provEl.value) provEl.value = province || '';
+  if (schoolEl && !schoolEl.value) schoolEl.value = school || '';
+  const text = $('pasteText');
+  if (text) text.value = '';
+  updatePastePreview();
+  openModal('pasteModal');
+  text?.focus();
+}
+
+function readPasteContext() {
+  return {
+    year: Number($('pasteYear')?.value) || null,
+    province: ($('pasteProvince')?.value || '').trim(),
+    school: ($('pasteSchool')?.value || '').trim(),
+  };
+}
+
+function updatePastePreview() {
+  const box = $('pastePreview');
+  if (!box) return;
+  const text = $('pasteText')?.value ?? '';
+  if (!text.trim()) {
+    box.innerHTML = '粘贴后这里会显示识别结果';
+    return;
+  }
+
+  const { kind, rows, warnings } = parsePastedTable(text);
+  const warn = warnings.length ? `<br><span style="color:#f39c12;">${warnings.join('；')}</span>` : '';
+
+  if (kind === 'plan') {
+    const total = sumPlan(rows);
+    box.innerHTML = `识别为 <b>招生计划</b>：${rows.length} 个专业，合计 <b>${total}</b> 人。<br>
+      将写入：<b>${readPasteContext().school || '（未填院校）'}</b> · ${readPasteContext().province || '（未填省份）'} · ${readPasteContext().year || '（未填年份）'}${warn}`;
+  } else if (kind === 'segment') {
+    box.innerHTML = `识别为 <b>一分一段表</b>：${rows.length} 行，分数 ${rows[0]?.score}~${rows.at(-1)?.score}。<br>
+      将写入：${readPasteContext().province || '（未填省份）'} · ${readPasteContext().year || '（未填年份）'}${warn}`;
+  } else if (kind === 'score') {
+    box.innerHTML = `识别为 <b>分数数据</b>：${rows.length} 行。<br>
+      将写入：${readPasteContext().school || '（未填院校）'} · ${readPasteContext().province || '（未填省份）'} · ${readPasteContext().year || '（未填年份）'}${warn}`;
+  } else {
+    box.innerHTML = `没认出来。表头需要包含「计划招生」/「累计人数」/「最低分」之一。${warn}`;
+  }
+}
+
+async function confirmPaste() {
+  const text = $('pasteText')?.value ?? '';
+  if (!text.trim()) { toast('先粘贴点内容', 'err'); return; }
+
+  const { kind, rows } = parsePastedTable(text);
+  const ctx = readPasteContext();
+
+  if (kind === 'plan') {
+    if (!ctx.school || !ctx.province || !ctx.year) { toast('导入招生计划需要填写 年份 / 招生省份 / 院校名称', 'err'); return; }
+    const pasted = sumPlan(rows);
+    const accumulate = Boolean($('pasteAccumulate')?.checked);
+    const key = schoolKey(ctx.school, ctx.province);
+    const existing = planFor(state, key, ctx.year);
+    const plan = accumulate && existing ? existing + pasted : pasted;
+
+    const { written, missing } = applyPlanRecords(state, [{ school: ctx.school, province: ctx.province, year: ctx.year, plan }]);
+    if (!written) {
+      toast(`没找到院校「${ctx.school}（${ctx.province}招生）」。请先在「个股」页把它加载出来，或确认名称完全一致。`, 'err', 6000);
+      return;
+    }
+    closeModal('pasteModal');
+    refreshIndices();
+    renderActive();
+    await persistState();
+    toast(`已写入 ${ctx.school} ${ctx.year} 年计划 ${plan} 人${accumulate && existing ? `（本次 +${pasted}）` : ''}${missing.length ? `，${missing.length} 所未找到` : ''}`, 'ok', 5000);
+    return;
+  }
+
+  if (kind === 'segment') {
+    if (!ctx.province || !ctx.year) { toast('导入一分一段需要填写 年份 / 省份', 'err'); return; }
+    const written = applySegmentRecords(state, rows.map((r) => ({
+      province: ctx.province, year: ctx.year, score: r.score, cumulative: r.cumulative,
+    })));
+    closeModal('pasteModal');
+    refreshIndices();
+    renderActive();
+    await persistState();
+    toast(`已写入 ${ctx.province} ${ctx.year} 年一分一段（${rows.length} 行）`, 'ok', 4000);
+    return;
+  }
+
+  if (kind === 'score') {
+    if (!ctx.school || !ctx.province || !ctx.year) { toast('导入分数需要填写 年份 / 招生省份 / 院校名称', 'err'); return; }
+    const applied = applyRecords(state, rows.map((r) => ({
+      year: ctx.year,
+      school: ctx.school,
+      province: ctx.province,
+      location: '',
+      plate: '',
+      major: r.major,
+      lowScore: r.lowScore,
+      lowRank: r.lowRank,
+      highScore: null,
+      highRank: null,
+      volume: r.volume ?? 0,
+    })));
+    closeModal('pasteModal');
+    refreshIndices();
+    refreshLocationOptions();
+    refreshSchoolOptions();
+    renderActive();
+    await persistState();
+    toast(`已写入 ${applied.added} 行${applied.skipped ? `，跳过 ${applied.skipped} 行（无位次且无法换算）` : ''}`, 'ok', 4500);
+    return;
+  }
+
+  toast('没认出表格类型，检查表头是否包含「计划招生」/「累计人数」/「最低分」', 'err', 5000);
+}
+
 /* ============================ 启动 ============================ */
 
 function bindEvents() {
   $('btnLoad')?.addEventListener('click', () => $('folderInput')?.click());
   $('folderInput')?.addEventListener('change', handleFolderChange);
   $('btnTemplate')?.addEventListener('click', downloadTemplate);
+  $('btnPaste')?.addEventListener('click', openPasteModal);
+  $('btnPasteCancel')?.addEventListener('click', () => closeModal('pasteModal'));
+  $('btnPasteConfirm')?.addEventListener('click', confirmPaste);
+  $('pasteText')?.addEventListener('input', updatePastePreview);
+  ['pasteYear', 'pasteProvince', 'pasteSchool'].forEach((id) => {
+    $(id)?.addEventListener('input', updatePastePreview);
+  });
   $('btnExportAll')?.addEventListener('click', exportAllData);
   $('btnExportStock')?.addEventListener('click', () => {
     if (!stockEntry().item) { toast('请先加载个股', 'err'); return; }
