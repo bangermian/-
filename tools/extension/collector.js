@@ -2,8 +2,8 @@
 // ==UserScript==
 // @name         高考顺 · 数据采集器
 // @namespace    gaokaoshun
-// @version      2.0.0
-// @description  ① 掌上高考批量抓院校分数线 ② 任意网页表格抓取（分数数据 / 一分一段表）→ 导出高考顺模板 CSV
+// @version      3.0.0
+// @description  ① 掌上高考批量抓院校分数线 ② 招生计划（招生人数）采集 ③ 任意网页表格抓取 → 导出高考顺模板 CSV
 // @author       gaokaoshun
 // @match        *://*/*
 // @grant        none
@@ -11,8 +11,12 @@
 // ==/UserScript==
 
 /*
- * 两条采集路径：
+ * 三条采集路径：
  *   A. 掌上高考批量：从页面自己发出的请求里拿到已签名的 URL，只替换 year 重放，逐校抓 6 年院校线。
+ *   A2. 招生计划（招生人数）：
+ *       招生计划接口的签名**只有第 1 页能重放**，第 2 页往后会返回 1010800。
+ *       所以改走页面本身：用 ?year=YYYY 指定年份 → 合成点击页码让页面自己请求
+ *       → 直接读渲染出来的表格，把「计划招生」列求和。
  *   B. 通用表格：扫描当前页所有 <table>，自动识别表头并把列映射到高考顺字段，
  *      支持「分数/位次」合并在一个单元格（如 670/1301）的写法。
  *      表头含「分数 + 累计人数」时自动判定为一分一段表，导出成换算表。
@@ -83,6 +87,8 @@
   state.log = state.log || [];
   state.scores = state.scores || [];      // 通用表格抓到的分数行
   state.segments = state.segments || [];  // 一分一段行
+  // 招生计划采集：{ running, queue:[{id,year}], index, results:{ id:{name,years:{年份:{total,rows,majors}}} } }
+  state.plan = state.plan || { running: false, queue: [], index: 0, results: {} };
 
   function loadState() {
     try { return JSON.parse(localStorage.getItem(STATE_KEY)) || {}; } catch { return {}; }
@@ -207,6 +213,168 @@
     }
     await sleep(BETWEEN_SCHOOLS);
     location.href = `https://www.gaokao.cn/school/${state.queue[state.index]}/special`;
+  }
+
+  /* ============================ A2. 招生计划 ============================ */
+  /*
+   * 为什么不用重放接口：
+   *   招生计划接口第 2 页往后的签名重放会被拒（code 1010800），只有第 1 页能重放。
+   *   但页面自己是能发请求的——所以改成：
+   *     1) 用 ?year=YYYY 直接指定年份（实测有效，下拉框也跟着变）
+   *     2) 合成点击页码，让页面自己请求下一页
+   *     3) 直接读渲染出来的表格，把「计划招生」列求和
+   *   这样既不碰签名，也不依赖登录以外的任何权限。
+   */
+
+  const PLAN_YEARS = ['2026', '2025', '2024', '2023', '2022', '2021'];
+  const PLAN_GAP = 1200;
+
+  const planResults = () => state.plan.results || (state.plan.results = {});
+  const planUrl = (id, year) => `https://www.gaokao.cn/school/${id}/sturule?year=${year}`;
+
+  function startPlanQueue(ids, years) {
+    const queue = [];
+    for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year) });
+    state.plan.queue = queue;
+    state.plan.index = 0;
+    state.plan.running = true;
+    saveState();
+    gotoPlanTask();
+  }
+
+  function stopPlanQueue() {
+    state.plan.running = false;
+    saveState();
+    render();
+  }
+
+  function gotoPlanTask() {
+    const task = state.plan.queue[state.plan.index];
+    if (!task) {
+      state.plan.running = false;
+      saveState();
+      render();
+      log(`招生计划采集完成：${Object.keys(planResults()).length} 所`);
+      return;
+    }
+    location.href = planUrl(task.id, task.year);
+  }
+
+  const planTable = () => [...document.querySelectorAll('table')]
+    .find((t) => (t.innerText || '').includes('专业名称'));
+
+  /** 读当前页的「计划招生」列 */
+  function readPlanPage() {
+    const table = planTable();
+    if (!table) return null;
+    const headCells = [...(table.querySelector('tr')?.children || [])].map((td) => (td.innerText || '').trim());
+    let col = headCells.findIndex((h) => /计划/.test(h));
+    if (col < 0) col = 1;
+
+    const trs = [...table.querySelectorAll('tr')].slice(1);
+    let sum = 0;
+    let parsed = 0;
+    const majors = [];
+    for (const tr of trs) {
+      const cells = [...tr.children].map((td) => (td.innerText || '').replace(/\s+/g, ' ').trim());
+      const num = parseInt(String(cells[col] ?? '').replace(/[^0-9]/g, ''), 10);
+      if (!Number.isFinite(num)) continue;
+      sum += num;
+      parsed += 1;
+      majors.push({ name: cells[0] || '', plan: num });
+    }
+    return { rows: trs.length, parsed, sum, majors };
+  }
+
+  /** 合成点击页码（实测能触发页面自己发请求） */
+  function clickPlanPage(n) {
+    const li = [...document.querySelectorAll('.ant-pagination-item')]
+      .find((x) => (x.textContent || '').trim() === String(n));
+    if (!li) return false;
+    const a = li.querySelector('a') || li;
+    a.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    a.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }
+
+  const planRequestCount = () => performance.getEntriesByType('resource')
+    .filter((r) => r.name.includes('special_plan')).length;
+
+  /** 把当前页（含翻页）的所有专业计划加总 */
+  async function collectPlanOnPage() {
+    const ready = await waitFor(() => document.querySelectorAll('table tr').length > 1, 15000, 500);
+    if (!ready) return { total: 0, rows: 0, majors: [] };
+
+    let total = 0;
+    let rows = 0;
+    const majors = [];
+    for (let page = 1; page <= 15; page += 1) {
+      const data = readPlanPage();
+      if (!data) break;
+      total += data.sum;
+      rows += data.parsed;
+      majors.push(...data.majors);
+      if (data.rows < 10) break;          // 不满一页 → 到底了
+      const before = planRequestCount();
+      if (!clickPlanPage(page + 1)) break;
+      await sleep(1500);
+      if (planRequestCount() <= before) break;
+    }
+    return { total, rows, majors };
+  }
+
+  /** 页面加载后，如果队头正是当前页，就采这一条并前进 */
+  async function runPlanTaskIfNeeded() {
+    if (!state.plan.running || !IS_GK) return;
+    if (!/\/sturule/.test(location.pathname)) return;
+
+    const task = state.plan.queue[state.plan.index];
+    if (!task) { state.plan.running = false; saveState(); render(); return; }
+
+    const id = currentSchoolId();
+    const urlYear = new URL(location.href).searchParams.get('year');
+    if (String(id) !== String(task.id) || String(urlYear) !== String(task.year)) return;
+
+    const meta = schoolById.get(String(task.id));
+    const name = meta ? meta[2] : `学校${task.id}`;
+    log(`采集中：${name} ${task.year}`);
+
+    const data = await collectPlanOnPage();
+    const results = planResults();
+    results[String(task.id)] = results[String(task.id)] || { name, years: {} };
+    results[String(task.id)].years[task.year] = data;
+
+    state.plan.index += 1;
+    saveState();
+    render();
+    log(`${name} ${task.year}：${data.total} 人 / ${data.rows} 条`);
+
+    await sleep(PLAN_GAP);
+    gotoPlanTask();
+  }
+
+  function buildPlanCsv(detail = false) {
+    const lines = [];
+    if (detail) {
+      lines.push('院校ID,院校名称,年份,专业名称,计划人数');
+      for (const [id, item] of Object.entries(planResults())) {
+        for (const year of Object.keys(item.years).sort()) {
+          for (const m of item.years[year].majors || []) {
+            lines.push([id, item.name, year, `"${String(m.name).replace(/"/g, '""')}"`, m.plan].join(','));
+          }
+        }
+      }
+    } else {
+      lines.push('院校ID,院校名称,年份,计划人数,专业条数');
+      for (const [id, item] of Object.entries(planResults())) {
+        for (const year of Object.keys(item.years).sort()) {
+          const y = item.years[year];
+          lines.push([id, item.name, year, y.total, y.rows].join(','));
+        }
+      }
+    }
+    return lines.join('\r\n');
   }
 
   /* ============================ B. 通用表格 ============================ */
@@ -370,14 +538,30 @@
 
   function render() {
     if (!panel) return;
+    const planTotal = Object.keys(planResults()).length;
     panel.querySelector('.gk-status').textContent =
-      `${state.running ? '运行中' : '空闲'} · 院校 ${Object.keys(state.rows).length} 所 · 分数行 ${state.scores.length} · 一分一段 ${state.segments.length}`;
+      `${state.running ? '运行中' : '空闲'} · 院校 ${Object.keys(state.rows).length} 所 · 分数行 ${state.scores.length} · 一分一段 ${state.segments.length} · 计划 ${planTotal} 所`;
     panel.querySelector('.gk-log').innerHTML = state.log.slice(0, 4)
       .map((l) => `<div>${l.replace(/</g, '&lt;')}</div>`).join('');
 
     const batchBtn = panel.querySelector('.gk-batch');
     if (batchBtn) {
       batchBtn.textContent = state.running ? '暂停' : (state.index > 0 && state.index < state.queue.length ? '继续' : '批量抓前 100');
+    }
+
+    const planStatus = panel.querySelector('.gk-plan-status');
+    if (planStatus) {
+      const q = state.plan.queue.length;
+      const i = state.plan.index;
+      if (state.plan.running) {
+        const task = state.plan.queue[i];
+        const meta = task ? schoolById.get(String(task.id)) : null;
+        planStatus.textContent = `采集中 ${i + 1}/${q}：${meta ? meta[2] : task?.id ?? ''} ${task?.year ?? ''}`;
+      } else if (q > 0) {
+        planStatus.textContent = `已停止 / 已完成（${Math.min(i, q)}/${q}）`;
+      } else {
+        planStatus.textContent = '';
+      }
     }
   }
 
@@ -417,6 +601,24 @@
               <button class="gk-one" style="flex:1;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;">抓当前页</button>
               <button class="gk-export-gk" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出院校线</button>
             </div>
+          </div>
+        </details>
+
+        <details class="gk-sec-plan" ${IS_GK ? 'open' : ''}>
+          <summary style="cursor:pointer;color:#f39c12;margin-top:8px;">招生计划（招生人数）</summary>
+          <div style="padding-top:8px;">
+            <div style="color:#6b7793;font-size:11px;margin-bottom:6px;">
+              按年份逐个打开 → 自动翻页 → 把「计划招生」列求和
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:6px;">
+              <button class="gk-plan-one" style="flex:1;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;">采本校 6 年</button>
+              <button class="gk-plan-all" style="flex:1;padding:6px;background:#ec0000;color:#fff;border:none;border-radius:5px;cursor:pointer;">批量 100 校</button>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="gk-plan-stop" style="flex:1;padding:6px;background:#4a5568;color:#fff;border:none;border-radius:5px;cursor:pointer;">停止</button>
+              <button class="gk-plan-export" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出计划</button>
+            </div>
+            <div class="gk-plan-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
           </div>
         </details>
 
@@ -492,6 +694,30 @@
       const csv = buildScoreCsv();
       if (csv.split('\r\n').length <= 1) { alert('还没有数据'); return; }
       download(`高考顺_院校线_${state.province}.csv`, csv);
+    });
+
+    $('.gk-plan-one').addEventListener('click', () => {
+      const id = currentSchoolId();
+      if (!id) { alert('请先打开某所学校的页面'); return; }
+      if (!confirm('采集本校 2021–2026 的招生计划？（约 1 分钟，会连续跳转 6 次）')) return;
+      startPlanQueue([id], PLAN_YEARS);
+    });
+
+    $('.gk-plan-all').addEventListener('click', () => {
+      if (state.plan.running) { log('已经在跑了，先停止再重开'); return; }
+      if (!confirm('采集软科前 100 校 × 6 年的招生计划？\n约 2–3 小时，可以随时点「停止」。')) return;
+      startPlanQueue(SCHOOLS.map((s) => String(s[1])), PLAN_YEARS);
+    });
+
+    $('.gk-plan-stop').addEventListener('click', () => {
+      stopPlanQueue();
+      log('已停止招生计划采集');
+    });
+
+    $('.gk-plan-export').addEventListener('click', () => {
+      const csv = buildPlanCsv();
+      if (csv.split('\r\n').length <= 1) { alert('还没有招生计划数据'); return; }
+      download(`高考顺_招生计划_${state.province}.csv`, csv);
     });
 
     $('.gk-export-seg').addEventListener('click', () => {
@@ -602,6 +828,7 @@
     if (IS_GK) {
       applyProvinceIfNeeded();
       runIfBatch().catch((e) => log('异常：' + e.message));
+      runPlanTaskIfNeeded().catch((e) => log('计划采集异常：' + e.message));
     }
   }
 
