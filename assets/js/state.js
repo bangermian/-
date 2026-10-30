@@ -283,11 +283,15 @@ export function applyParsedFile(state, parsed) {
  * @returns {{ok:boolean, message?:string, key?:string}}
  */
 export function addMajorRecord(state, input) {
-  const required = ['school', 'province', 'major', 'year', 'highRank', 'lowRank'];
-  for (const field of required) {
-    if (input[field] === null || input[field] === undefined || input[field] === '') {
-      return { ok: false, message: '请完整填写院校、省份、专业、年份与最高/最低位次' };
-    }
+  const labels = {
+    school: '院校名称', province: '招生省份', major: '专业名称', year: '年份',
+    highRank: '最高位次', lowRank: '最低位次',
+  };
+  const missing = Object.keys(labels).filter((field) => (
+    input[field] === null || input[field] === undefined || input[field] === ''
+  ));
+  if (missing.length > 0) {
+    return { ok: false, message: `还缺：${missing.map((field) => labels[field]).join('、')}` };
   }
   if (input.highRank > input.lowRank) {
     [input.highRank, input.lowRank] = [input.lowRank, input.highRank];

@@ -328,7 +328,10 @@ function renderPlateTab() {
 
 /**
  * 个股页：校名 / 招生省份变化时，把「所属板块」同步成该校真实的板块。
- * 只填了校名且能唯一确定省份时，顺手把省份补上。
+ *
+ * 招生省份**永远不做纠正**——同一所学校会在多个省招生，
+ * `天津工业大学 + 浙江` 可能只是还没数据的新组合，不能被自动改回天津。
+ * 只有在省份为空、且该校只有一个招生省份时，才顺手补一个默认值。
  */
 function syncStockMeta() {
   const schoolEl = $('stock-school');
@@ -337,28 +340,27 @@ function syncStockMeta() {
   const school = (schoolEl?.value ?? '').trim();
   let province = (provinceEl?.value ?? '').trim();
 
-  if (school) {
-    // 当前省份在这个校名下找不到时，才用唯一匹配的省份兜底——
-    // 用户手动改过的省份只要有效就不动它
-    const existing = province ? state.schools[schoolKey(school, province)] : null;
-    if (!existing) {
-      const provinces = [...new Set(
-        Object.values(state.schools)
-          .filter((item) => item.school === school)
-          .map((item) => item.province),
-      )];
-      if (provinces.length === 1) {
-        province = provinces[0];
-        if (provinceEl) provinceEl.value = province;
-      }
+  const records = school
+    ? Object.values(state.schools).filter((item) => item.school === school)
+    : [];
+
+  // 省份为空才给默认值，填了就不动
+  if (school && !province && records.length > 0) {
+    const provinces = [...new Set(records.map((item) => item.province))];
+    if (provinces.length === 1) {
+      province = provinces[0];
+      if (provinceEl) provinceEl.value = province;
     }
   }
 
-  if (!school || !province) return null;
-  const item = state.schools[schoolKey(school, province)];
-  if (!item) return null;
-  if (plateEl && item.plate && plateEl.value !== item.plate) plateEl.value = item.plate;
-  return item;
+  if (!school || !plateEl) return null;
+
+  // 板块：优先用「校名 + 省份」这条精确记录；没有就用这所学校任意一条的板块，
+  // 这样给新省份补录数据时，板块下拉也不会退回到无关的值
+  const exact = province ? state.schools[schoolKey(school, province)] : null;
+  const source = exact ?? records[0] ?? null;
+  if (source?.plate && plateEl.value !== source.plate) plateEl.value = source.plate;
+  return exact;
 }
 
 function renderStockTab() {
@@ -501,8 +503,15 @@ async function handleAddMajor() {
     return;
   }
 
-  const existingLocation = item?.location && item.location !== '待定' ? item.location : null;
-  const location = existingLocation || window.prompt('该院校所在省份/城市（用于板块聚合，如：天津、浙江）', '') || '待定';
+  // 院校所在地：优先用「校名+省份」这条；没有就借同一所学校别的省份的记录，
+  // 避免给老学校补一个新省份时还要弹框问一遍
+  const sameSchool = Object.values(state.schools).filter((entry) => entry.school === school);
+  const knownLocation = [item, ...sameSchool]
+    .map((entry) => entry?.location)
+    .find((location) => location && location !== '待定');
+  const location = knownLocation
+    || window.prompt('该院校所在省份/城市（用于板块聚合，如：天津、浙江）', '')
+    || '待定';
 
   const result = addMajorRecord(state, {
     school,
