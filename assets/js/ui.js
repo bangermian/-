@@ -56,7 +56,7 @@ export function closeModal(id) {
 
 /* ---------------- 空状态 ---------------- */
 
-const DEFAULT_EMPTY_DESC = '点击右上角「📁 加载文件夹」，选择存放 Excel/CSV 的根目录。<br>文件名需符合：<code>年份 招生省份 院校 板块 考生数.xlsx</code>';
+const DEFAULT_EMPTY_DESC = '把 Excel / CSV 放进项目的 <code>data/</code> 目录，刷新页面就会自动加载。<br>也可以点右上角「加载数据」手动选择文件夹。';
 
 /**
  * @param {boolean} visible

@@ -61,12 +61,16 @@ export async function saveSnapshot(payload) {
 export async function loadSnapshot() {
   try {
     const db = await openDatabase();
-    const request = await withStore(db, 'readonly', (store) => store.get(STORAGE.key));
-    db.close();
+    // 注意：必须在创建请求的同时挂 onsuccess。
+    // 传出去再挂的话，事务可能早就 complete 了，onsuccess 永远不会再触发，Promise 就卡死。
     const value = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORAGE.storeName, 'readonly');
+      const request = tx.objectStore(STORAGE.storeName).get(STORAGE.key);
       request.onsuccess = () => resolve(request.result ?? null);
-      request.onerror = () => reject(request.error);
+      request.onerror = () => reject(request.error ?? new Error('读取失败'));
+      tx.onabort = () => reject(tx.error ?? new Error('事务中止'));
     });
+    db.close();
     if (value) return value;
   } catch {
     // 继续尝试 localStorage

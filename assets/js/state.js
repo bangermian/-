@@ -20,6 +20,8 @@ export function createState() {
     segments: {},
     // 招生计划：{ 院校key: { 年份: 计划人数 } }，来自粘贴导入
     plans: {},
+    // 上次自动加载 data/ 时的文件指纹，用来判断"有没有新数据"
+    autoSignature: null,
   };
 }
 
@@ -413,6 +415,7 @@ export function serialize(state) {
     provinceCandidates: state.provinceCandidates,
     segments: state.segments,
     plans: state.plans,
+    autoSignature: state.autoSignature ?? null,
     schools: Object.fromEntries(
       Object.entries(state.schools).map(([key, item]) => [key, {
         name: item.name,
@@ -441,6 +444,7 @@ export function deserialize(raw) {
   state.provinceCandidates = parsed.provinceCandidates ?? {};
   state.segments = parsed.segments ?? {};
   state.plans = parsed.plans ?? {};
+  state.autoSignature = parsed.autoSignature ?? null;
   for (const [key, item] of Object.entries(parsed.schools ?? {})) {
     state.schools[key] = {
       name: item.name,

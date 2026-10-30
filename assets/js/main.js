@@ -473,10 +473,18 @@ async function handleFolderChange(event) {
   const files = [...(input.files ?? [])];
   input.value = '';
   if (files.length === 0) return;
+  await processFiles(files, { source: 'manual' });
+}
 
+/**
+ * @param {File[]} files
+ * @param {{source?: 'manual'|'auto'}} options
+ */
+async function processFiles(files, options = {}) {
+  const auto = options.source === 'auto';
   const targets = files.filter((file) => ACCEPTED_EXT.test(file.name));
   if (targets.length === 0) {
-    toast('所选文件夹里没有 .xlsx / .xls / .csv 文件', 'err');
+    if (!auto) toast('所选文件夹里没有 .xlsx / .xls / .csv 文件', 'err');
     return;
   }
 
@@ -542,18 +550,20 @@ async function handleFolderChange(event) {
 
   const elapsed = ((performance.now() - started) / 1000).toFixed(1);
   const schools = Object.keys(state.schools).length;
-  setStatus(`已加载 ${succeeded} 个文件 · 用时 ${elapsed}s`, 'ok');
+  setStatus(auto
+    ? `自动加载 data/ · ${succeeded} 个文件 · 用时 ${elapsed}s`
+    : `已加载 ${succeeded} 个文件 · 用时 ${elapsed}s`, 'ok');
 
   if (schools === 0 && segmentCount > 0) {
     toast(`已载入 ${segmentCount} 份一分一段表，现在可以加载分数数据了`, 'ok', 5000);
-    reportProblems(skipped, failed, '跳过', '失败');
+    reportProblems(skipped, failed, '跳过', '失败', auto);
     return;
   }
 
   const parts = [`${succeeded} 个文件`, `${recordCount} 条记录`, `${schools} 所院校`];
   if (candidateCount > 0) parts.push(`${candidateCount} 条考生数`);
   if (segmentCount > 0) parts.push(`${segmentCount} 份一分一段表`);
-  toast(`加载完成：${parts.join(' / ')}`, 'ok', 4200);
+  if (!auto) toast(`加载完成：${parts.join(' / ')}`, 'ok', 4200);
 
   if (convertedCount > 0) {
     toast(`${convertedCount} 个位次由「一分一段表」从分数换算得到`, 'ok', 5000);
@@ -566,12 +576,86 @@ async function handleFolderChange(event) {
   if (missing > 0) {
     toast(`${missing} 个「院校-年份」没有考生数，百分位按 7 万估算（可在模板里的「考生数」表补齐）`, 'err', 8000);
   }
-  reportProblems(skipped, failed, '跳过', '失败');
+  reportProblems(skipped, failed, '跳过', '失败', auto);
 }
 
-function reportProblems(skipped, failed, skipLabel, failLabel) {
+/* ---------------- 自动加载 data/ ---------------- */
+
+const DATA_INDEX_API = '/api/data-index';
+
+/**
+ * 从服务器把 data/ 目录里的文件拉下来喂给解析器。
+ * 只有在「服务器存在 + 文件指纹和上次不同」时才重新解析，避免每次刷新都白跑一遍。
+ */
+async function autoLoadFromDataDir({ manual = false } = {}) {
+  if (location.protocol === 'file:') return false;
+
+  let payload;
+  try {
+    const resp = await fetch(DATA_INDEX_API, { cache: 'no-store' });
+    if (!resp.ok) return false;
+    payload = await resp.json();
+  } catch {
+    return false;   // 不是我们的服务器（比如 GitHub Pages），静默跳过
+  }
+
+  // PowerShell 版服务器在只有一个文件时会序列化成对象而不是数组，这里统一成数组
+  const raw = payload?.files;
+  const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  if (list.length === 0) {
+    if (manual) toast('data/ 目录里没有可读的 xlsx / csv', 'err');
+    return false;
+  }
+
+  const signature = String(payload.signature ?? '');
+  if (!manual && signature && signature === state.autoSignature) return false;
+
+  setStatus(`正在读取 data/ 目录 ${list.length} 个文件 …`, '');
+  try {
+    const files = [];
+    for (const item of list) {
+      const url = `/data/${String(item.rel).split('/').map(encodeURIComponent).join('/')}`;
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) continue;
+      const buffer = await resp.arrayBuffer();
+      const name = String(item.rel).split('/').pop();
+      const file = new File([buffer], name, { type: 'application/octet-stream' });
+      Object.defineProperty(file, 'webkitRelativePath', { value: String(item.rel) });
+      files.push(file);
+    }
+    if (files.length === 0) return false;
+
+    await processFiles(files, { source: 'auto' });
+    state.autoSignature = signature;
+    await persistState();
+    return true;
+  } catch (error) {
+    console.warn('[高考顺] 自动加载失败', error);
+    return false;
+  }
+}
+
+/** 每隔一段时间看一眼 data/ 有没有变，变了就重新加载 */
+function startDataWatcher(intervalMs = 45000) {
+  if (location.protocol === 'file:') return;
+  let busy = false;
+  setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const before = state.autoSignature;
+      const loaded = await autoLoadFromDataDir();
+      if (loaded && before) toast('检测到 data/ 有新数据，已自动重新加载', 'ok', 4000);
+    } finally {
+      busy = false;
+    }
+  }, intervalMs);
+}
+
+function reportProblems(skipped, failed, skipLabel, failLabel, quiet = false) {
   if (skipped.length) console.warn(`[高考顺] ${skipLabel} ${skipped.length} 个文件`, skipped);
   if (failed.length) console.error(`[高考顺] ${failLabel} ${failed.length} 个文件`, failed);
+  if (quiet) return;
   const total = skipped.length + failed.length;
   if (total === 0) return;
   const first = [...skipped, ...failed][0];
@@ -983,8 +1067,15 @@ async function boot() {
     setStatus(`已从本地缓存恢复 ${schools} 所院校${when ? `（${when}）` : ''}`, 'ok');
   } else {
     setEmptyState(true);
-    setStatus('请点击「📁 加载文件夹」导入 Excel / CSV 数据', '');
+    setStatus('正在检查 data/ 目录 …', '');
   }
+
+  // 服务器在场时，直接把 data/ 里的文件读进来，不用手动选文件夹
+  const autoLoaded = await autoLoadFromDataDir();
+  if (!autoLoaded && !(restored && Object.keys(restored.schools).length > 0)) {
+    setStatus('把 Excel / CSV 放进 data/ 目录即可自动加载，也可以点「加载数据」手动选择', '');
+  }
+  startDataWatcher();
 
   updateStatusCount();
 }

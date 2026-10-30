@@ -45,10 +45,53 @@ function parseArgs(argv) {
 
 const { port, root } = parseArgs(process.argv.slice(2));
 
+/* ---------- data/ 目录索引 ---------- */
+
+const DATA_DIR = path.join(root, 'data');
+const DATA_EXT = /\.(xlsx|xls|csv)$/i;
+// 元数据文件（学校清单之类）不是行情数据，别让前端去解析它
+const DATA_IGNORE = /^(软科|schools|README)/i;
+
+/** 递归列出 data/ 下的数据文件，路径用 / 分隔，前端拿它当「所在文件夹」 */
+async function listDataFiles(dir, base = '', depth = 0) {
+  if (depth > 6) return [];
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const out = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      out.push(...await listDataFiles(path.join(dir, entry.name), rel, depth + 1));
+    } else if (DATA_EXT.test(entry.name) && !DATA_IGNORE.test(entry.name)) {
+      const st = await fs.stat(path.join(dir, entry.name)).catch(() => null);
+      out.push({ rel, size: st?.size ?? 0, mtime: Math.round(st?.mtimeMs ?? 0) });
+    }
+  }
+  return out;
+}
+
+/** 文件集合的指纹：数量 + 总字节 + 最新修改时间，任一变化就重新加载 */
+async function dataIndex() {
+  const files = await listDataFiles(DATA_DIR);
+  const signature = `${files.length}:${files.reduce((s, f) => s + f.size, 0)}:${Math.max(0, ...files.map((f) => f.mtime))}`;
+  return { files, signature };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     let pathname = decodeURIComponent(url.pathname);
+
+    // 让前端自动发现 data/ 里的数据，不用手动选文件夹
+    if (pathname === '/api/data-index') {
+      const payload = await dataIndex();
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      }).end(JSON.stringify(payload));
+      return;
+    }
+
     if (pathname.endsWith('/')) pathname += 'index.html';
 
     const target = path.resolve(root, '.' + pathname);

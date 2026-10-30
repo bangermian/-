@@ -122,6 +122,36 @@ while ($true) {
         $queryIndex = $rawPath.IndexOf('?')
         if ($queryIndex -ge 0) { $rawPath = $rawPath.Substring(0, $queryIndex) }
         $decoded = [System.Uri]::UnescapeDataString($rawPath)
+
+        # The app uses this endpoint to auto-discover files under data/.
+        # Keep this block ASCII-only: Windows PowerShell 5.1 reads .ps1 as ANSI,
+        # so any literal CJK here would be mangled. \u8f6f\u79d1 == the school-list file.
+        if ($decoded -eq '/api/data-index') {
+            $dataDir = Join-Path $Root 'data'
+            $files = New-Object System.Collections.ArrayList
+            if (Test-Path -LiteralPath $dataDir) {
+                Get-ChildItem -LiteralPath $dataDir -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.Extension -match '^\.(xlsx|xls|csv)$' -and
+                        $_.Name -notmatch '^(?:\u8f6f\u79d1|schools|README)'
+                    } |
+                    ForEach-Object {
+                        $rel = $_.FullName.Substring($dataDir.Length).TrimStart('\', '/').Replace('\', '/')
+                        [void]$files.Add([pscustomobject]@{
+                            rel   = $rel
+                            size  = $_.Length
+                            mtime = [int64]([DateTimeOffset]$_.LastWriteTimeUtc).ToUnixTimeMilliseconds()
+                        })
+                    }
+            }
+            $sorted = @($files | Sort-Object rel)
+            $sig = "{0}:{1}:{2}" -f $sorted.Count, ($sorted | Measure-Object -Property size -Sum).Sum, (($sorted | Measure-Object -Property mtime -Maximum).Maximum)
+            if (-not $sig) { $sig = '0:0:0' }
+            $json = [pscustomobject]@{ files = $sorted; signature = $sig } | ConvertTo-Json -Depth 4 -Compress
+            Send-Response -Stream $stream -Status 200 -Reason 'OK' -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) -HeadOnly $headOnly
+            continue
+        }
+
         if ($decoded -eq '/' -or $decoded.EndsWith('/')) { $decoded += 'index.html' }
 
         $relative = $decoded.TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
