@@ -4,13 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>使用说明 · 高考顺</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='14' fill='%23e02b2b'/><text x='50' y='70' font-size='58' text-anchor='middle' fill='%23fff' font-family='sans-serif'>高</text></svg>">
   <link rel="stylesheet" href="assets/css/style.css">
   <link rel="stylesheet" href="assets/css/help.css">
 </head>
 <body class="doc">
   <header class="doc-header">
-    <div class="logo">📖 高考顺 · 使用说明</div>
+    <div class="logo">高考顺 · 使用说明</div>
     <a href="index.html">← 返回应用</a>
   </header>
 
@@ -31,8 +31,8 @@
 
     <h2>2. 数据填入格式</h2>
     <div class="callout">
-      <strong>现在只需要一张表。</strong>点顶部「📄 模板」下载 <code>高考顺_数据模板.xlsx</code>，
-      在「分数数据」表里一行填一个专业，填完直接拖进「📁 加载文件夹」即可。
+      <strong>现在只需要一张表。</strong>点顶部「模板」下载 <code>高考顺_数据模板.xlsx</code>，
+      在「分数数据」表里一行填一个专业，填完直接拖进「加载数据」即可。
       文件名、文件夹层级都不再是约束。
     </div>
 
@@ -53,16 +53,16 @@
       <table>
         <thead><tr><th>列名</th><th>必填</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>年份</td><td>✅</td><td>4 位数字</td></tr>
-          <tr><td>招生省份</td><td>✅</td><td>该院校在哪个省招生，决定用哪个省的考生数换算百分位</td></tr>
-          <tr><td>院校名称</td><td>✅</td><td>同名 + 同招生省份 = 同一只"股票"</td></tr>
-          <tr><td>专业名称</td><td>✅</td><td>一行一个专业</td></tr>
-          <tr><td>最低位次</td><td>✅</td><td>该专业当年的最低录取位次</td></tr>
-          <tr><td>最高位次</td><td>⬜</td><td>缺省时用最低位次填充（此时没有上影线）</td></tr>
-          <tr><td>最高分 / 最低分</td><td>⬜</td><td>缺一补一；都缺则不画「分差柱状图」</td></tr>
-          <tr><td>录取人数</td><td>⬜</td><td>缺省按 0 处理，聚合权重退化为等权</td></tr>
-          <tr><td>院校所在地</td><td>⬜</td><td>缺省取文件所在文件夹名；再缺省记为「待定」</td></tr>
-          <tr><td>板块</td><td>⬜</td><td>可写 <code>92</code> / <code>双一流</code> / <code>新型研究型</code> / <code>中外合办</code> / <code>双非</code>，缺省双非</td></tr>
+          <tr><td>年份</td><td>是</td><td>4 位数字</td></tr>
+          <tr><td>招生省份</td><td>是</td><td>该院校在哪个省招生，决定用哪个省的考生数换算百分位</td></tr>
+          <tr><td>院校名称</td><td>是</td><td>同名 + 同招生省份 = 同一只"股票"</td></tr>
+          <tr><td>专业名称</td><td>是</td><td>一行一个专业</td></tr>
+          <tr><td>最低位次</td><td>是</td><td>该专业当年的最低录取位次</td></tr>
+          <tr><td>最高位次</td><td>否</td><td>缺省时用最低位次填充（此时没有上影线）</td></tr>
+          <tr><td>最高分 / 最低分</td><td>否</td><td>缺一补一；都缺则不画「分差柱状图」</td></tr>
+          <tr><td>录取人数</td><td>否</td><td>缺省按 0 处理，聚合权重退化为等权</td></tr>
+          <tr><td>院校所在地</td><td>否</td><td>缺省取文件所在文件夹名；再缺省记为「待定」</td></tr>
+          <tr><td>板块</td><td>否</td><td>可写 <code>92</code> / <code>双一流</code> / <code>新型研究型</code> / <code>中外合办</code> / <code>双非</code>，缺省双非</td></tr>
         </tbody>
       </table>
     </div>
@@ -106,7 +106,7 @@
     但页面上的数据是看得见、选得中的。所以走<strong>粘贴导入</strong>：</p>
     <ol>
       <li>在网页上选中「专业名称 / 计划招生」那几列 → <kbd>Ctrl+C</kbd></li>
-      <li>回到高考顺，点顶部 <strong>「📋 粘贴导入」</strong></li>
+      <li>回到高考顺，点顶部 <strong>「粘贴导入」</strong></li>
       <li>填好年份、招生省份、院校名称，粘进文本框</li>
       <li>看预览里的「合计 N 人」对不对，点导入</li>
     </ol>
@@ -204,13 +204,13 @@
 
     <h2>7. 操作提示</h2>
     <ul>
-      <li>点「📁 加载文件夹」选数据根目录，系统递归读取全部 Excel/CSV</li>
+      <li>点「加载数据」选数据根目录，系统递归读取全部 Excel/CSV</li>
       <li>切换「大盘 / 板块 / 个股」查看不同维度，三张图联动缩放</li>
       <li>个股页输入院校与招生省份 → 点「加载个股」；下拉可切到单个专业</li>
       <li>均线周期（MA1~MA4）改动后自动重绘，设置会记住</li>
-      <li>「📤 导出当前个股」支持纵向专业格式 / 横向年份格式</li>
-      <li>「📤 导出全部」把每所院校导成一个工作表</li>
-      <li>数据与手录记录自动存到浏览器本地（IndexedDB），刷新不丢；点「🗑 清空」可清除</li>
+      <li>「导出当前个股」支持纵向专业格式 / 横向年份格式</li>
+      <li>「导出全部」把每所院校导成一个工作表</li>
+      <li>数据与手录记录自动存到浏览器本地（IndexedDB），刷新不丢；点「清空」可清除</li>
     </ul>
 
     <h2>8. 常见问题</h2>

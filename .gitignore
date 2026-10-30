@@ -16,3 +16,6 @@ desktop.ini
 *.log
 *.tmp
 ~$*
+
+# 自动化专用 Chrome 配置（含登录态，绝不入库）
+.chrome-auto/

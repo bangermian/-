@@ -72,16 +72,16 @@ export function platesOf(plate) {
 }
 
 export const COLORS = {
-  up: '#ec0000',
-  upBorder: '#8a0000',
-  down: '#00da3c',
-  downBorder: '#008f28',
-  neutral: '#666',
-  ma: ['#f39c12', '#9b59b6', '#3498db', '#1abc9c'],
-  axis: '#8f9bb3',
-  grid: '#1d2a4a',
-  tooltipBg: 'rgba(22, 33, 62, 0.96)',
-  tooltipBorder: '#0f3460',
+  up: '#e02b2b',
+  upBorder: '#b71c1c',
+  down: '#12a05c',
+  downBorder: '#0a7a45',
+  neutral: '#8f959e',
+  ma: ['#f2a33c', '#8e6bd6', '#2f7fd0', '#17a2a2'],
+  axis: '#8f959e',
+  grid: '#eef0f3',
+  tooltipBg: '#ffffff',
+  tooltipBorder: '#e3e5e8',
 };
 
 /** 均线默认周期 */

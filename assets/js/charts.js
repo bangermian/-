@@ -25,8 +25,8 @@ function baseTooltip() {
   return {
     backgroundColor: COLORS.tooltipBg,
     borderColor: COLORS.tooltipBorder,
-    textStyle: { color: '#fff', fontSize: 12 },
-    extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.45); border-radius: 6px;',
+    textStyle: { color: '#1f2329', fontSize: 12 },
+    extraCssText: 'box-shadow: 0 2px 8px rgba(0,0,0,.08); border-radius: 2px;',
   };
 }
 
@@ -95,8 +95,8 @@ export function createChartController(echarts, elements) {
         smooth: true,
         symbol: 'circle',
         symbolSize: 4,
-        lineStyle: { width: 1.4, color: '#8f9bb3', type: 'dashed' },
-        itemStyle: { color: '#8f9bb3' },
+        lineStyle: { width: 1, color: '#9aa0a8', type: 'dashed' },
+        itemStyle: { color: '#9aa0a8' },
         z: 4,
         connectNulls: true,
       }]
@@ -135,7 +135,7 @@ export function createChartController(echarts, elements) {
         symbol: 'pin',
         symbolSize: 38,
         itemStyle: { color: '#f39c12' },
-        label: { fontSize: 9, color: '#1a1a2e', fontWeight: 'bold' },
+        label: { fontSize: 9, color: '#ffffff', fontWeight: 'bold' },
       });
     }
 
@@ -154,7 +154,7 @@ export function createChartController(echarts, elements) {
       tooltip: {
         ...baseTooltip(),
         trigger: 'axis',
-        axisPointer: { type: 'cross', lineStyle: { color: '#39496e' }, crossStyle: { color: '#39496e' } },
+        axisPointer: { type: 'cross', lineStyle: { color: '#c9cdd4' }, crossStyle: { color: '#c9cdd4' } },
         formatter: (params) => formatKlineTooltip(params, series, mode, baselineByYear),
       },
       axisPointer: { link: [{ xAxisIndex: 'all' }] },
@@ -181,15 +181,15 @@ export function createChartController(echarts, elements) {
         nameTextStyle: { color: COLORS.axis, fontSize: 11, align: 'right' },
       },
       dataZoom: [{ type: 'inside', xAxisIndex: [0], start: 0, end: 100, zoomOnMouseWheel: true }],
-      graphic: title
-        ? [{ type: 'text', left: 66, top: 10, style: { text: title, fill: '#7d8aa3', fontSize: 11 } }]
-        : [],
+      // 标题由页面顶部的行情条承担，图内不再重复
+      graphic: [],
       series: [
         {
           name: 'K线',
           type: 'candlestick',
           data: values,
           itemStyle: colors,
+          barWidth: 10,
           markPoint: {
             symbol: 'pin',
             symbolSize: 42,
@@ -219,7 +219,7 @@ export function createChartController(echarts, elements) {
       tooltip: {
         ...baseTooltip(),
         trigger: 'axis',
-        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.03)' } },
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(0,0,0,0.04)' } },
         formatter: (params) => {
           const index = params?.[0]?.dataIndex ?? 0;
           const item = series[index];
@@ -255,7 +255,7 @@ export function createChartController(echarts, elements) {
         name: '招生人数',
         type: 'bar',
         data: values.map((value, index) => ({ value, itemStyle: { color: colors[index] } })),
-        barMaxWidth: 26,
+        barWidth: 12,
       }],
     }, true);
   }
@@ -292,7 +292,7 @@ export function createChartController(echarts, elements) {
       tooltip: {
         ...baseTooltip(),
         trigger: 'axis',
-        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(255,255,255,0.03)' } },
+        axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(0,0,0,0.04)' } },
         formatter: (params) => {
           const index = params?.[0]?.dataIndex ?? 0;
           const item = rows[index];
@@ -314,37 +314,25 @@ export function createChartController(echarts, elements) {
         axisTick: { show: false },
       },
       yAxis: {
-        min: Math.floor(allLow - pad),
-        max: Math.ceil(allHigh + pad),
+        min: 0,
         axisLine: { show: false },
         axisLabel: { ...AXIS_TEXT, fontSize: 10 },
         splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } },
-        name: '分数',
+        name: '分差',
         nameTextStyle: { color: COLORS.axis, fontSize: 10, align: 'right' },
       },
       dataZoom: [{ type: 'inside', xAxisIndex: [0], start: 0, end: 100 }],
       series: [
         {
-          name: '基准',
+          name: '分差',
           type: 'bar',
-          stack: 'spread',
-          silent: true,
-          itemStyle: { color: 'transparent', borderColor: 'transparent' },
-          emphasis: { itemStyle: { color: 'transparent', borderColor: 'transparent' } },
-          data: lows,
-          barMaxWidth: 26,
-        },
-        {
-          name: '分差区间',
-          type: 'bar',
-          stack: 'spread',
           data: diffs.map((value, index) => ({ value, itemStyle: { color: colors[index] } })),
-          barMaxWidth: 26,
-          itemStyle: { borderRadius: [3, 3, 0, 0] },
+          barWidth: 14,
+          itemStyle: { borderRadius: [2, 2, 0, 0] },
           label: {
             show: true,
             position: 'top',
-            formatter: (params) => `${params.value}分`,
+            formatter: (params) => `${params.value}`,
             color: COLORS.axis,
             fontSize: 10,
           },
