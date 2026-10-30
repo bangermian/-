@@ -9,7 +9,7 @@
  *   旧版直接对原始位次做加权平均，再除以一个游客数，跨省合并时量纲是错的。
  */
 
-import { PLATES, REGIONS } from './config.js';
+import { PLATES, platesOf, REGIONS } from './config.js';
 import { round2 } from './utils.js';
 
 function emptyAcc() {
@@ -55,11 +55,15 @@ function buildBuckets(schools) {
 
   for (const school of Object.values(schools)) {
     const location = school.location || '待定';
+    // 板块是标签：985/211 同时属于 92 和双一流，两个桶都要进
+    const tags = platesOf(school.plate);
     for (const candle of school.series ?? []) {
       add(byLocation, location, 'all', candle, school.province);
-      add(byLocation, location, school.plate, candle, school.province);
       add(byProvince, school.province, 'all', candle, school.province);
-      add(byProvince, school.province, school.plate, candle, school.province);
+      for (const tag of tags) {
+        add(byLocation, location, tag, candle, school.province);
+        add(byProvince, school.province, tag, candle, school.province);
+      }
     }
   }
 

@@ -138,14 +138,14 @@ function heatTone(delta) {
   return delta > 0 ? { tone: 'up', text: '更难' } : { tone: 'down', text: '更易' };
 }
 
-function renderHeatView(name, series) {
+function renderHeatView(name, series, emptyHint) {
   view.mode = 'heat';
   view.series = series;
 
   const candles = toCandles(series);
   const { hasSpread } = chartController.render({ mode: 'heat', series: candles, title: name, ma: view.ma });
   toggleSpread(hasSpread);
-  setEmptyState(candles.length === 0);
+  setEmptyState(candles.length === 0, emptyHint);
 
   if (candles.length === 0) {
     resetInfoBar();
@@ -262,9 +262,11 @@ function toggleSpread(hasSpread) {
 function renderMarketTab() {
   const { key, entry } = marketEntry();
   view.key = key;
-  const name = entry?.data?.length ? REGION_LABELS[key] ?? key : `${REGION_LABELS[key] ?? key}（暂无数据）`;
+  const label = REGION_LABELS[key] ?? key;
   const series = entry?.data ?? [];
-  renderHeatView(name, series);
+  const name = series.length ? label : `${label}（暂无数据）`;
+  renderHeatView(name, series, series.length ? null
+    : `「${label}」没有数据：当前数据里没有位于该区域的院校。<br>区域归属在 <a href="help.html" target="_blank">说明</a> 里按省份划分。`);
   renderDataList('market-data-list', seriesRows(series), null);
 }
 
@@ -278,10 +280,15 @@ function renderPlateTab() {
   const parts = [];
   parts.push(location && location !== 'all' ? `${location}` : REGION_LABELS[region] ?? region);
   parts.push(plate === 'all' ? '全部板块' : PLATE_LABELS[plate] ?? plate);
-  const name = entry?.data?.length ? parts.join(' · ') : `${parts.join(' · ')}（暂无数据）`;
-
   const series = entry?.data ?? [];
-  renderHeatView(name, series);
+  const name = series.length ? parts.join(' · ') : `${parts.join(' · ')}（暂无数据）`;
+
+  const hint = series.length ? null
+    : `「${parts.join(' · ')}」没有数据。<br>
+       当前数据里没有同时满足这个「所在地 + 板块」组合的院校。`
+      + `<br>试试把「学校所在地」改成「全部省份」，或者换个板块。`;
+
+  renderHeatView(name, series, hint);
   renderDataList('plate-data-list', seriesRows(series), null);
 }
 

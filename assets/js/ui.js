@@ -56,9 +56,20 @@ export function closeModal(id) {
 
 /* ---------------- 空状态 ---------------- */
 
-export function setEmptyState(visible) {
+const DEFAULT_EMPTY_DESC = '点击右上角「📁 加载文件夹」，选择存放 Excel/CSV 的根目录。<br>文件名需符合：<code>年份 招生省份 院校 板块 考生数.xlsx</code>';
+
+/**
+ * @param {boolean} visible
+ * @param {string} [message] 自定义说明（不传则用默认的"怎么加载数据"）
+ */
+export function setEmptyState(visible, message) {
   const el = $('emptyState');
-  if (el) el.hidden = !visible;
+  if (!el) return;
+  el.hidden = !visible;
+  const desc = el.querySelector('.empty-desc');
+  const title = el.querySelector('.empty-title');
+  if (title) title.textContent = message ? '这个组合没有数据' : '还没有数据';
+  if (desc) desc.innerHTML = message || DEFAULT_EMPTY_DESC;
 }
 
 /* ---------------- 下拉框 ---------------- */

@@ -44,6 +44,33 @@ export const PLATE_ALIASES = {
   shuangfei: 'shuangfei',
 };
 
+/**
+ * 板块是**标签**，不是单选。
+ *
+ * 985/211 院校本来就属于「双一流」。如果只打一个 92 标签，
+ * 用户选「双一流」时这些学校会全部消失——这正是旧版的 bug。
+ * 这里把单个板块值展开成它应有的全部标签。
+ *
+ * @param {string} plate 数据里写的板块
+ * @returns {string[]} 该院校归属的板块标签（至少一个）
+ */
+export function platesOf(plate) {
+  switch (String(plate ?? '').toLowerCase()) {
+    case '92':
+      return ['92', 'doublefirst'];
+    case 'doublefirst':
+      return ['doublefirst'];
+    case 'newresearch':
+      return ['newresearch', 'doublefirst'];
+    case 's11':
+      return ['s11'];
+    case 'shuangfei':
+      return ['shuangfei'];
+    default:
+      return ['shuangfei'];
+  }
+}
+
 export const COLORS = {
   up: '#ec0000',
   upBorder: '#8a0000',

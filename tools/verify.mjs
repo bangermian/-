@@ -236,6 +236,23 @@ test('基准线：同省同板块的平均百分位', () => {
   assert.equal(benchmarks['浙江|s11'][0].percentile, 60);
 });
 
+test('板块是标签：985/211 同时属于 92 和双一流', () => {
+  const state = createState();
+  state.schools = {
+    X: {
+      name: 'X', school: 'X', province: '天津', plate: '92', location: '天津', majors: {},
+      series: [{ year: 2024, close: 10000, volume: 10, percentile: 20 }],
+    },
+  };
+  const { plate } = computeIndices(state);
+  // 92 桶里有
+  assert.equal(plate.east_92.data[0].schools, 1);
+  // 双一流桶里也应该有（旧版这里是 0，正是"选双一流刷不出来"的原因）
+  assert.equal(plate.east_doublefirst.data[0].schools, 1);
+  // 双非桶里没有
+  assert.equal(plate.east_shuangfei.data.length, 0);
+});
+
 /* ------------------------------ 状态 ------------------------------ */
 
 function record(overrides = {}) {
