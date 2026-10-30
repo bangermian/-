@@ -249,7 +249,7 @@ shuangfei     → 双非
 │       ├── charts.js       ECharts 三联图
 │       ├── ui.js           DOM 渲染
 │       └── utils.js        通用工具
-├── data/                   示例数据（天津 / 浙江）+ 软科前100.csv
+├── data/                   示例数据（天津 / 浙江）+ 软科排名.csv（814 所，含掌上高考 ID）
 ├── tools/
 │   ├── serve.mjs           Node 静态服务器
 │   ├── serve.ps1           PowerShell 静态服务器（零依赖）
