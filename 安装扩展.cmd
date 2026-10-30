@@ -2,30 +2,51 @@
 setlocal
 cd /d "%~dp0"
 
+set "EXTDIR=%~dp0tools\extension"
+
+if not exist "%EXTDIR%\manifest.json" goto :nomanifest
+if not exist "%EXTDIR%\collector.js" goto :nomanifest
+
+set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+if not exist "%CHROME%" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+if not exist "%CHROME%" set "CHROME=%LocalAppData%\Google\Chrome\Application\chrome.exe"
+
 echo.
-echo   高考顺 . 采集器扩展 - 安装助手
-echo   ================================
+echo   Gaokaoshun collector - extension install helper
+echo   ==============================================
 echo.
-echo   这是一个本地扩展：不需要应用商店、不需要登录、不联网。
+echo   This is a LOCAL extension: no store, no login, no network.
 echo.
-echo   接下来会打开两个窗口：
-echo     1. Chrome 的扩展管理页
-echo     2. 扩展所在文件夹（tools\extension）
-echo.
-echo   在扩展管理页里：
-echo     [1] 打开右上角「开发者模式」
-echo     [2] 点「加载已解压的扩展程序」
-echo     [3] 选中弹出的 tools\extension 文件夹
-echo.
-echo   装完刷新任意网页，右下角会出现「高考顺 · 采集器」。
+echo   In the Chrome page that opens:
+echo     [1] turn on  Developer mode  (top right)
+echo     [2] click  Load unpacked
+echo     [3] select this folder:
+echo         %EXTDIR%
 echo.
 
-start "" chrome "chrome://extensions"
-start "" explorer "%~dp0tools\extension"
+if exist "%CHROME%" (
+  start "" "%CHROME%" --new-window "chrome://extensions"
+) else (
+  echo   Chrome was not found in the usual locations.
+  echo   Please open chrome://extensions manually.
+)
 
-echo   扩展目录：%~dp0tools\extension
-echo.
-echo   提示：这个文件夹里只要 manifest.json 和 collector.js 两个文件，
-echo         以后改了用户脚本，运行 node tools/build-extension.mjs 重新生成即可。
+start "" explorer "%EXTDIR%"
+
+echo   The extension folder has been opened in Explorer.
+echo   After loading it, refresh any page and the panel appears bottom-right.
 echo.
 pause
+exit /b 0
+
+:nomanifest
+echo.
+echo   ERROR: extension files are missing.
+echo   Expected:
+echo     %EXTDIR%\manifest.json
+echo     %EXTDIR%\collector.js
+echo.
+echo   Make sure the whole project folder was copied, then run this again.
+echo.
+pause
+exit /b 1
