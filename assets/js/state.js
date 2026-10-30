@@ -16,6 +16,8 @@ export function createState() {
     savedAt: null,
     schools: {},
     provinceCandidates: {},
+    // 一分一段表：{ 省份: { 年份: [{score, cumulative}] } }，按分数降序
+    segments: {},
   };
 }
 
@@ -61,6 +63,58 @@ export function applyCandidateRecords(state, list) {
   return written;
 }
 
+/* ------------------------------ 一分一段表 ------------------------------ */
+
+/** 批量写入一分一段数据；返回写入的「省份-年份」份数 */
+export function applySegmentRecords(state, list) {
+  const touched = new Set();
+  for (const item of list ?? []) {
+    if (!item?.province || !item?.year || !Number.isFinite(item.score) || !Number.isFinite(item.cumulative)) continue;
+    const byProvince = state.segments[item.province] ?? (state.segments[item.province] = {});
+    const rows = byProvince[item.year] ?? (byProvince[item.year] = []);
+    rows.push({ score: item.score, cumulative: item.cumulative });
+    touched.add(`${item.province}|${item.year}`);
+  }
+  // 按分数降序整理，并去重（同分保留最后一条）
+  for (const key of touched) {
+    const [province, year] = key.split('|');
+    const rows = state.segments[province][year];
+    const dedup = new Map(rows.map((r) => [r.score, r]));
+    state.segments[province][year] = [...dedup.values()].sort((a, b) => b.score - a.score);
+  }
+  return touched.size;
+}
+
+/** 该省该年的一分一段表（按分数降序），没有则 null */
+export function segmentTableFor(state, province, year) {
+  return state.segments?.[province]?.[year] ?? null;
+}
+
+/**
+ * 分数 → 位次（累计人数）。
+ * 表按分数降序；找第一个 score <= 目标分的行，它的累计人数就是该分的位次。
+ * @returns {number|null} 表中查不到（低于表尾）时返回 null
+ */
+export function rankForScore(state, province, year, score) {
+  const table = segmentTableFor(state, province, year);
+  if (!table || !Number.isFinite(score)) return null;
+  for (const row of table) {
+    if (score >= row.score) return row.cumulative;
+  }
+  return null;
+}
+
+/** 已有哪些省份/年份的一分一段表 */
+export function listSegments(state) {
+  const out = [];
+  for (const [province, years] of Object.entries(state.segments ?? {})) {
+    for (const [year, rows] of Object.entries(years)) {
+      out.push({ province, year: Number(year), rows: rows.length });
+    }
+  }
+  return out.sort((a, b) => a.province.localeCompare(b.province, 'zh-CN') || a.year - b.year);
+}
+
 /** 确保院校存在，返回其对象 */
 function ensureSchool(state, { school, province, plate, location }) {
   const key = schoolKey(school, province);
@@ -91,13 +145,38 @@ function ensureSchool(state, { school, province, plate, location }) {
  * @returns {{keys:string[], added:number}}
  */
 export function applyRecords(state, records) {
-  if (!records?.length) return { keys: [], added: 0 };
+  if (!records?.length) return { keys: [], added: 0, skipped: 0, converted: 0 };
 
   const touched = new Map();
   let added = 0;
+  let skipped = 0;
+  let converted = 0;
 
   for (const record of records) {
-    if (!record?.school || !record?.province || !record?.major || !record?.year) continue;
+    if (!record?.school || !record?.province || !record?.major || !record?.year) { skipped += 1; continue; }
+
+    const year = Number(record.year);
+    let highRank = record.highRank ?? null;
+    let lowRank = record.lowRank ?? null;
+
+    // 只有分数没有位次时，用一分一段表换算（这是「官网/表格只给分数」的自动补位）
+    if (highRank === null || lowRank === null) {
+      const hasScore = Number.isFinite(record.lowScore) || Number.isFinite(record.highScore);
+      if (hasScore) {
+        if (lowRank === null && Number.isFinite(record.lowScore)) {
+          const r = rankForScore(state, record.province, year, record.lowScore);
+          if (r !== null) { lowRank = r; converted += 1; }
+        }
+        if (highRank === null && Number.isFinite(record.highScore)) {
+          const r = rankForScore(state, record.province, year, record.highScore);
+          if (r !== null) { highRank = r; converted += 1; }
+        }
+        if (highRank === null) highRank = lowRank;
+        if (lowRank === null) lowRank = highRank;
+      }
+    }
+
+    if (highRank === null || lowRank === null) { skipped += 1; continue; }
 
     const item = ensureSchool(state, {
       school: record.school,
@@ -110,11 +189,11 @@ export function applyRecords(state, records) {
 
     const bucket = item.majors[record.major] ?? (item.majors[record.major] = []);
     const next = {
-      year: Number(record.year),
+      year,
       highScore: record.highScore ?? null,
       lowScore: record.lowScore ?? null,
-      highRank: record.highRank,
-      lowRank: record.lowRank,
+      highRank,
+      lowRank,
       volume: Math.round(record.volume ?? 0),
     };
     const index = bucket.findIndex((entry) => entry.year === next.year);
@@ -124,23 +203,29 @@ export function applyRecords(state, records) {
   }
 
   for (const key of touched.keys()) rebuildSchool(state, key);
-  return { keys: [...touched.keys()], added };
+  return { keys: [...touched.keys()], added, skipped, converted };
 }
 
 /**
  * 写入一个文件的解析结果（parser.parseWorkbookFile 的返回值）。
  */
 export function applyParsedFile(state, parsed) {
-  const result = { keys: [], added: 0, candidates: 0 };
+  const result = { keys: [], added: 0, candidates: 0, segments: 0, skipped: 0, converted: 0 };
   if (!parsed) return result;
 
   if (parsed.candidates?.length) {
     result.candidates = applyCandidateRecords(state, parsed.candidates);
   }
+  // 先写一分一段表，再写记录，这样同一批数据里的分数也能立刻换算
+  if (parsed.segments?.length) {
+    result.segments = applySegmentRecords(state, parsed.segments);
+  }
   if (parsed.records?.length) {
     const applied = applyRecords(state, parsed.records);
     result.keys = applied.keys;
     result.added = applied.added;
+    result.skipped = applied.skipped;
+    result.converted = applied.converted;
   }
   return result;
 }
@@ -280,6 +365,7 @@ export function serialize(state) {
     schemaVersion: STORAGE.schemaVersion,
     savedAt: Date.now(),
     provinceCandidates: state.provinceCandidates,
+    segments: state.segments,
     schools: Object.fromEntries(
       Object.entries(state.schools).map(([key, item]) => [key, {
         name: item.name,
@@ -306,6 +392,7 @@ export function deserialize(raw) {
 
   const state = createState();
   state.provinceCandidates = parsed.provinceCandidates ?? {};
+  state.segments = parsed.segments ?? {};
   for (const [key, item] of Object.entries(parsed.schools ?? {})) {
     state.schools[key] = {
       name: item.name,

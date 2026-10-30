@@ -116,7 +116,7 @@ function locateHeader(rows, maxProbe = 15) {
     const map = {
       year: -1, province: -1, school: -1, location: -1, plate: -1, major: -1,
       highScore: -1, lowScore: -1, highRank: -1, lowRank: -1, volume: -1,
-      candidates: -1,
+      candidates: -1, score: -1, cumulative: -1,
     };
 
     cells.forEach((text, index) => {
@@ -128,6 +128,8 @@ function locateHeader(rows, maxProbe = 15) {
       if (map.location === -1 && /所在地|所在省份|城市|地区/.test(text)) { map.location = index; return; }
       if (map.plate === -1 && /板块|层次|类型/.test(text)) { map.plate = index; return; }
       if (map.candidates === -1 && /考生数|考生总数|报名人数/.test(text)) { map.candidates = index; return; }
+      if (map.cumulative === -1 && /累计|合计人数/.test(text)) { map.cumulative = index; return; }
+      if (map.score === -1 && /^分数$|^成绩$|^投档分$/.test(text)) { map.score = index; return; }
       if (map.highScore === -1 && /最高分/.test(text)) { map.highScore = index; return; }
       if (map.lowScore === -1 && /最低分|投档线|分数线/.test(text)) { map.lowScore = index; return; }
       if (map.highRank === -1 && /最高位次|最高排名/.test(text)) { map.highRank = index; return; }
@@ -137,8 +139,10 @@ function locateHeader(rows, maxProbe = 15) {
 
     const isAggregate = map.year !== -1 && map.school !== -1 && map.major !== -1;
     const isCandidates = map.year !== -1 && map.candidates !== -1 && map.province !== -1 && map.school === -1;
+    const isSegments = map.score !== -1 && map.cumulative !== -1;
     const isLegacy = map.major !== -1 && (map.highRank !== -1 || map.lowRank !== -1);
 
+    if (isSegments) return { map, headerIndex: i, kind: 'segments' };
     if (isAggregate) return { map, headerIndex: i, kind: 'aggregate' };
     if (isCandidates) return { map, headerIndex: i, kind: 'candidates' };
     if (isLegacy && !best) best = { map, headerIndex: i, kind: 'legacy' };
@@ -191,9 +195,10 @@ export function parseAggregateRows(rows, { fallbackLocation = '待定' } = {}) {
     if (!Number.isInteger(year) || !school || !major) { skipped += 1; continue; }
 
     const ranks = readRankCells(row, map);
-    if (!ranks) { skipped += 1; continue; }
-
     const scores = readScoreCells(row, map);
+    // 只有分数、没有位次的推行也要保留：之后可以用「一分一段表」换算
+    if (!ranks && scores.highScore === null && scores.lowScore === null) { skipped += 1; continue; }
+
     const province = map.province !== -1 ? String(row[map.province] ?? '').trim() : '';
     const location = map.location !== -1 ? String(row[map.location] ?? '').trim() : '';
     const volume = map.volume !== -1 ? toNumber(row[map.volume]) : null;
@@ -205,8 +210,8 @@ export function parseAggregateRows(rows, { fallbackLocation = '待定' } = {}) {
       location: location || fallbackLocation,
       plate: normalizePlate(map.plate !== -1 ? row[map.plate] : ''),
       major,
-      highRank: ranks.highRank,
-      lowRank: ranks.lowRank,
+      highRank: ranks ? ranks.highRank : null,
+      lowRank: ranks ? ranks.lowRank : null,
       highScore: scores.highScore,
       lowScore: scores.lowScore,
       volume: volume && volume > 0 ? Math.round(volume) : 0,
@@ -236,6 +241,48 @@ export function parseCandidatesRows(rows) {
     if (!Number.isInteger(year) || !province || !count || count <= 0) continue;
     out.push({ year, province, candidates: Math.round(count) });
   }
+  return out.length ? out : null;
+}
+
+/**
+ * 一分一段表：分数 | 人数 | 累计人数
+ * 用于把「只有分数、没有位次」的数据换算成位次。
+ * @returns {Array<{year:number|null, province:string, score:number, cumulative:number, band:string}>|null}
+ */
+export function parseSegmentRows(rows) {
+  if (!Array.isArray(rows) || rows.length < 3) return null;
+  const located = locateHeader(rows);
+  if (!located || located.kind !== 'segments') return null;
+
+  const { map, headerIndex } = located;
+  const out = [];
+
+  for (let i = headerIndex + 1; i < rows.length; i += 1) {
+    const row = rows[i] ?? [];
+    if (row.every((cell) => isBlank(cell))) continue;
+
+    const rawScore = String(row[map.score] ?? '').trim();
+    const cumulative = toNumber(row[map.cumulative]);
+    if (!rawScore || !Number.isFinite(cumulative)) continue;
+
+    // 可能是 "680-750" 这样的区间，取区间下界
+    const match = rawScore.match(/(\d{2,3})/);
+    if (!match) continue;
+    const score = Number(match[1]);
+    if (!Number.isFinite(score)) continue;
+
+    const year = map.year !== -1 ? toNumber(row[map.year]) : null;
+    const province = map.province !== -1 ? String(row[map.province] ?? '').trim() : '';
+
+    out.push({
+      year: Number.isInteger(year) ? year : null,
+      province,
+      score,
+      cumulative: Math.round(cumulative),
+      band: rawScore,
+    });
+  }
+
   return out.length ? out : null;
 }
 
@@ -340,9 +387,20 @@ export function parseWorkbookFile({ name, relPath, buffer, XLSX }) {
     if (parsed) candidates.push(...parsed);
   }
 
-  // 2) 汇总表
-  const aggregateRecords = [];
   const warnings = [];
+
+  // 2) 一分一段表
+  const segments = [];
+  for (const sheet of sheets) {
+    const parsed = parseSegmentRows(sheet.rows);
+    if (parsed) segments.push(...parsed);
+  }
+  if (segments.length > 0) {
+    return { kind: 'segments', records: [], candidates, segments, warnings, meta: null };
+  }
+
+  // 3) 汇总表
+  const aggregateRecords = [];
   let hasAggregate = false;
   for (const sheet of sheets) {
     const parsed = parseAggregateRows(sheet.rows, { fallbackLocation: location });

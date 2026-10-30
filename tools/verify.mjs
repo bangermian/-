@@ -10,11 +10,11 @@ import {
 } from '../assets/js/aggregate.js';
 import { computeIndices } from '../assets/js/indices.js';
 import {
-  normalizePlate, parseAggregateRows, parseCandidatesRows, parseFileName, parseSheetRows,
+  normalizePlate, parseAggregateRows, parseCandidatesRows, parseFileName, parseSegmentRows, parseSheetRows,
 } from '../assets/js/parser.js';
 import {
-  addMajorRecord, applyCandidateRecords, applyRecords, applyParsedFile,
-  countMissingCandidates, countRecords, createState, deserialize, removeYear, serialize,
+  addMajorRecord, applyCandidateRecords, applyRecords, applyParsedFile, applySegmentRecords,
+  countMissingCandidates, countRecords, createState, deserialize, rankForScore, removeYear, serialize,
 } from '../assets/js/state.js';
 
 let passed = 0;
@@ -77,15 +77,17 @@ test('汇总表：中文板块名归一', () => {
   assert.equal(normalizePlate(''), 'shuangfei');
 });
 
-test('汇总表：缺位次的行被跳过并告警', () => {
+test('汇总表：只有分数没有位次的行会保留，等待一分一段表换算', () => {
   const rows = [
     AGGREGATE_HEADER,
     [2025, '天津', 'A大学', '天津', '双一流', '计算机', 600, 590, null, null, 5],
     [2025, '天津', 'A大学', '天津', '双一流', '数学', 600, 590, 1000, 2000, 5],
+    [2025, '天津', 'A大学', '天津', '双一流', '空行', null, null, null, null, 5],
   ];
-  const { records, warnings } = parseAggregateRows(rows);
-  assert.equal(records.length, 1);
-  assert.ok(warnings.length > 0);
+  const { records } = parseAggregateRows(rows);
+  assert.equal(records.length, 2);
+  assert.equal(records[0].lowRank, null);
+  assert.equal(records[0].lowScore, 590);
 });
 
 test('汇总表：院校所在地缺省时回落到文件夹名', () => {
@@ -323,6 +325,73 @@ test('缓存序列化后可完整还原（含考生数）', () => {
 test('版本不一致的缓存会被丢弃', () => {
   assert.equal(deserialize('{"schemaVersion":1,"schools":{}}'), null);
   assert.equal(deserialize('not json'), null);
+});
+
+/* ------------------------------ 一分一段表 ------------------------------ */
+
+test('一分一段表可识别（分数 + 累计人数）', () => {
+  const rows = [
+    ['分数', '人数', '累计人数'],
+    ['680-750', 656, 656],
+    ['679', 66, 722],
+    ['678', 67, 789],
+  ];
+  const list = parseSegmentRows(rows);
+  assert.equal(list.length, 3);
+  assert.equal(list[0].score, 680);      // 区间取了下界
+  assert.equal(list[0].cumulative, 656);
+  assert.equal(list[2].score, 678);
+});
+
+test('普通分数表不会被误判成一分一段表', () => {
+  const rows = [
+    ['年份', '院校名称', '专业名称', '最低分', '最低位次'],
+    [2025, 'A大学', '计算机', 600, 1000],
+  ];
+  assert.equal(parseSegmentRows(rows), null);
+});
+
+test('分数 → 位次：落在哪一档取哪一档的累计人数', () => {
+  const state = createState();
+  applySegmentRecords(state, [
+    { province: '天津', year: 2025, score: 690, cumulative: 100 },
+    { province: '天津', year: 2025, score: 680, cumulative: 300 },
+    { province: '天津', year: 2025, score: 670, cumulative: 600 },
+  ]);
+  assert.equal(rankForScore(state, '天津', 2025, 690), 100);
+  assert.equal(rankForScore(state, '天津', 2025, 685), 300);   // 690~680 之间 → 680 档
+  assert.equal(rankForScore(state, '天津', 2025, 670), 600);
+  assert.equal(rankForScore(state, '天津', 2025, 650), null);  // 低于表尾，查不到就是不猜
+  assert.equal(rankForScore(state, '天津', 2024, 680), null);  // 没有该年
+});
+
+test('只有分数时导入会自动补上位次', () => {
+  const state = createState();
+  applySegmentRecords(state, [{ province: '天津', year: 2025, score: 680, cumulative: 300 }]);
+  const result = applyRecords(state, [{
+    year: 2025, school: 'S', province: '天津', location: '天津', plate: 's11',
+    major: 'A', highScore: null, lowScore: 685, highRank: null, lowRank: null, volume: 0,
+  }]);
+  assert.equal(result.added, 1);
+  assert.equal(result.converted, 1);
+  assert.equal(state.schools['S_天津'].series[0].close, 300);
+});
+
+test('既无位次也换算不了的行会被跳过并计数', () => {
+  const state = createState();
+  const result = applyRecords(state, [{
+    year: 2025, school: 'S', province: '天津', location: '天津', plate: 's11',
+    major: 'A', highScore: null, lowScore: 675, highRank: null, lowRank: null, volume: 0,
+  }]);
+  assert.equal(result.added, 0);
+  assert.equal(result.skipped, 1);
+});
+
+test('缓存里保留一分一段表', () => {
+  const state = createState();
+  applySegmentRecords(state, [{ province: '天津', year: 2025, score: 680, cumulative: 300 }]);
+  const restored = deserialize(serialize(state));
+  assert.equal(rankForScore(restored, '天津', 2025, 680), 300);
 });
 
 /* ------------------------------ 稳健分差 / 录取率 / 断档 ------------------------------ */

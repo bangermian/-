@@ -476,6 +476,9 @@ async function handleFolderChange(event) {
   let succeeded = 0;
   let recordCount = 0;
   let candidateCount = 0;
+  let segmentCount = 0;
+  let convertedCount = 0;
+  let skippedRows = 0;
   const skipped = [];
   const failed = [];
 
@@ -488,13 +491,19 @@ async function handleFolderChange(event) {
       const buffer = await file.arrayBuffer();
       const parsed = parseWorkbookFile({ name: file.name, relPath, buffer, XLSX: window.XLSX });
 
-      if (parsed.records.length === 0 && parsed.candidates.length === 0) {
+      const empty = parsed.records.length === 0
+        && parsed.candidates.length === 0
+        && (parsed.segments?.length ?? 0) === 0;
+      if (empty) {
         skipped.push(`${file.name}：${parsed.warnings[0] ?? '没有有效行'}`);
       } else {
         const applied = applyParsedFile(state, parsed);
         recordCount += applied.added;
         candidateCount += applied.candidates;
-        if (applied.added > 0 || applied.candidates > 0) succeeded += 1;
+        segmentCount += applied.segments ?? 0;
+        convertedCount += applied.converted ?? 0;
+        skippedRows += applied.skipped ?? 0;
+        if (applied.added > 0 || applied.candidates > 0 || applied.segments > 0) succeeded += 1;
       }
     } catch (error) {
       failed.push(`${file.name}：${error?.message ?? '解析异常'}`);
@@ -507,7 +516,7 @@ async function handleFolderChange(event) {
     }
   }
 
-  if (Object.keys(state.schools).length === 0 && candidateCount === 0) {
+  if (Object.keys(state.schools).length === 0 && candidateCount === 0 && segmentCount === 0) {
     setStatus('未能从所选文件夹中读到有效数据', 'warn');
     setEmptyState(true);
     toast(`没有读到有效数据${skipped.length ? `：${skipped[0]}` : ''}`, 'err', 6000);
@@ -525,9 +534,24 @@ async function handleFolderChange(event) {
   const elapsed = ((performance.now() - started) / 1000).toFixed(1);
   const schools = Object.keys(state.schools).length;
   setStatus(`已加载 ${succeeded} 个文件 · 用时 ${elapsed}s`, 'ok');
+
+  if (schools === 0 && segmentCount > 0) {
+    toast(`已载入 ${segmentCount} 份一分一段表，现在可以加载分数数据了`, 'ok', 5000);
+    reportProblems(skipped, failed, '跳过', '失败');
+    return;
+  }
+
   const parts = [`${succeeded} 个文件`, `${recordCount} 条记录`, `${schools} 所院校`];
   if (candidateCount > 0) parts.push(`${candidateCount} 条考生数`);
+  if (segmentCount > 0) parts.push(`${segmentCount} 份一分一段表`);
   toast(`加载完成：${parts.join(' / ')}`, 'ok', 4200);
+
+  if (convertedCount > 0) {
+    toast(`${convertedCount} 个位次由「一分一段表」从分数换算得到`, 'ok', 5000);
+  }
+  if (skippedRows > 0) {
+    toast(`${skippedRows} 行既没有位次、也无法用分数换算，已跳过（先加载一分一段表再导入可解决）`, 'err', 8000);
+  }
 
   const missing = countMissingCandidates(state);
   if (missing > 0) {
