@@ -24,7 +24,7 @@ param(
   [string]$Years = '2026,2025,2024,2023,2022,2021',
   [string]$Out = '',
   [int]$DelayMs = 150,
-  [switch]$NoPlan,
+  [switch]$WithPlan,
   [switch]$Quiet,
   [switch]$DryRun,
   [switch]$NoResume
@@ -150,6 +150,7 @@ $script:StatSkip = 0
 $script:StatPlanFilled = 0
 $script:StatPlanPartial = 0
 $script:StatPlanFilledByQuery = 0
+$script:StatBatchSkipped = 0
 $script:StatPlanAll = 0
 $script:StatPlanMatched = 0
 
@@ -254,7 +255,7 @@ $progressFile = Join-Path $Root ".cache\crawl-${Province}-${From}-${To}.json"
 
 Write-Host ''
 Write-Host "  省份 $Province (id $provinceId) · 学校 $($schools.Count) 所 · 年份 $($yearList -join '、')" -ForegroundColor Cyan
-$planNote = if ($NoPlan) { '不抓招生计划' } else { '同时抓招生计划（按专业组，免签名）' }
+$planNote = if ($WithPlan) { '同时抓招生计划（按专业组，数值可能偏小，仅作参考）' } else { '只抓分数线；人数留给插件导出后合并' }
 Write-Host "  任务 $($schools.Count * $yearList.Count) 个「校×年」· $planNote" -ForegroundColor Cyan
 Write-Host "  输出 $outFile" -ForegroundColor Cyan
 Write-Host ''
@@ -320,11 +321,8 @@ foreach ($task in $tasks) {
     $script:AvailabilityCache[$sid] = Get-SchoolAvailability $sid
   }
   $avail = $script:AvailabilityCache[$sid]
-  if ($avail.Years.Count -gt 0 -and ($avail.Years -notcontains [int]$year)) {
-    $script:StatSkip++
-    if (-not $Quiet) { Write-Host ("  - {0} {1}: 站点没有该年数据，跳过" -f $name, $year) -ForegroundColor DarkGray }
-    continue
-  }
+  # 注意：provincescore 里的年份清单**并不完整**（实测 2026 年和部分院校年份缺失，
+  # 但接口其实有数据）。所以不能拿它当跳过依据，只用来取专业组。
 
   $common = @{
     local_province_id = $provinceId
@@ -353,8 +351,13 @@ foreach ($task in $tasks) {
   }
 
   # 按专业大类聚合
+  # 只保留本科批：提前批（小语种、核工程、艺术史论等）是另一条录取通道，
+  # 和本科批混在一起会让同一专业的分数失真；插件页面默认也只显示本科批。
   $groups = @{}
+  $skippedBatch = 0
   foreach ($it in $items) {
+    $batchName = [string]$it.local_batch_name
+    if ($batchName -and ($batchName -notmatch '本科')) { $skippedBatch++; continue }
     $major = Short-Name ([string]$it.sp_name)
     if (-not $groups.ContainsKey($major)) {
       $groups[$major] = [pscustomobject]@{
@@ -374,7 +377,7 @@ foreach ($task in $tasks) {
 
   # 招生计划：按专业组分别取，每组一页就够（免签名）
   $planByMajor = @{}
-  if (-not $NoPlan) {
+  if ($WithPlan) {
     $planGroups = @($avail.GroupsByYear[[int]$year])
     $typeId = '3'
     if ($avail.TypeByYear.ContainsKey([int]$year)) { $typeId = $avail.TypeByYear[[int]$year] }
@@ -446,6 +449,7 @@ foreach ($task in $tasks) {
     $rowsWritten++
   }
   if ($sb.Length -gt 0) { Append-Utf8 $outFile $sb.ToString() }
+  $script:StatBatchSkipped += $skippedBatch
 
   $done[$task.Key] = $true
   $finished++
@@ -480,5 +484,6 @@ if ($script:StatPlanAll -gt 0) {
     Write-Host ("  另有 {0} 人不体现在本表：提前批/小语种等专业没有分数线数据，或所在专业组超过 10 条被截断" -f $gap) -ForegroundColor DarkGray
   }
 }
+if ($script:StatBatchSkipped -gt 0) { Write-Host ("  跳过提前批等非本科批记录 {0} 条" -f $script:StatBatchSkipped) -ForegroundColor DarkGray }
 Write-Host "  输出：$outFile" -ForegroundColor Green
 Write-Host '  拖进高考顺就能加载；也可以再跑 merge-plan.ps1 用插件数据补人数。' -ForegroundColor DarkGray
