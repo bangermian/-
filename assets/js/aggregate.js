@@ -45,14 +45,22 @@ export function yearlyAggregate(majors) {
 
       const volume = Number(record.volume) || 0;
       const weight = volume > 0 ? volume : 1;
-      const avgRank = (record.highRank + record.lowRank) / 2;
+      // 收盘位次 = 该专业的**录取线（最低位次）**。
+      // 早先用过 (最高位次+最低位次)/2，但掌上高考只公开最低位次，
+      // 有最高位次的数据会系统性偏"难"约 11%，两套口径混在一起就没法比了。
+      const cutoffRank = record.lowRank;
 
-      acc.sumWeightedRank += avgRank * weight;
+      acc.sumWeightedRank += cutoffRank * weight;
       acc.weight += weight;
       acc.volume += volume;
 
-      if (Number.isFinite(record.highRank)) acc.best = Math.min(acc.best, record.highRank);
-      if (Number.isFinite(record.lowRank)) acc.worst = Math.max(acc.worst, record.lowRank);
+      // 影线 = 全校各专业录取线的跨度：上沿最难专业、下沿最易专业。
+      // 早先用 highRank 当上沿，但它只对少数有公开数据的学校存在，
+      // 为了保证每所学校口径一致，上下沿都用录取线。
+      if (Number.isFinite(cutoffRank)) {
+        acc.best = Math.min(acc.best, cutoffRank);
+        acc.worst = Math.max(acc.worst, cutoffRank);
+      }
 
       if (Number.isFinite(record.lowScore)) {
         acc.maxLowScore = acc.maxLowScore === null ? record.lowScore : Math.max(acc.maxLowScore, record.lowScore);
@@ -214,11 +222,11 @@ export function buildSchoolSeries(majors, candidatesByYear = {}) {
 /** 单个专业 → K 线 */
 export function buildMajorSeries(records, candidatesByYear = {}) {
   const yearly = sortByYear(records ?? []).map((record) => {
-    const close = round2((record.highRank + record.lowRank) / 2);
+    const close = round2(record.lowRank);
     return {
       year: record.year,
       close,
-      best: record.highRank,
+      best: record.lowRank,
       worst: record.lowRank,
       volume: record.volume ?? 0,
       maxScore: record.lowScore ?? null,

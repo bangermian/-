@@ -350,9 +350,8 @@ export function createChartController(echarts, elements) {
 
     if (mode === 'rank') {
       rows.push(`开盘位次：${formatNumber(item.open)}`);
-      rows.push(`收盘位次：${formatNumber(item.close)}`);
-      rows.push(`最好位次：${formatNumber(item.best ?? item.low)}`);
-      rows.push(`最差位次：${formatNumber(item.worst ?? item.high)}`);
+      rows.push(`收盘位次：${formatNumber(item.close)}（各专业录取线加权平均）`);
+      rows.push(`录取线区间：${formatNumber(item.best ?? item.low)} ~ ${formatNumber(item.worst ?? item.high)}（最难专业 ~ 最易专业）`);
       if (Number.isFinite(item.percentile)) {
         const suffix = item.percentileEstimated ? '（估算考生数）' : '';
         rows.push(`全省百分位：${item.percentile.toFixed(2)}%${suffix}`);

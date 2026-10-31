@@ -148,15 +148,18 @@ const majors = {
   ],
 };
 
-test('收盘位次 = 按录取人数加权', () => {
+test('收盘位次 = 各专业录取线按招生人数加权', () => {
   const series = yearlyAggregate(majors);
-  assert.equal(series[0].close, 15625);
-  assert.equal(series[1].close, 14625);
+  // 2024: (12000×10 + 20000×30) / 40 = 18000
+  // 2025: (11000×10 + 19000×30) / 40 = 17000
+  assert.equal(series[0].close, 18000);
+  assert.equal(series[1].close, 17000);
 });
 
 test('影线与招生数', () => {
   const [y2024] = yearlyAggregate(majors);
-  assert.equal(y2024.best, 8000);
+  // 影线 = 各专业录取线的跨度：计算机 12000 ~ 材料 20000
+  assert.equal(y2024.best, 12000);
   assert.equal(y2024.worst, 20000);
   assert.equal(y2024.volume, 40);
 });
@@ -164,7 +167,7 @@ test('影线与招生数', () => {
 test('百分位 = 位次 / 考生数，缺考生数时标记估算', () => {
   const years = yearlyAggregate(majors);
   const withCand = attachPercentiles(years, { 2024: 70000, 2025: 74000 });
-  assert.equal(withCand[0].percentile, 22.32); // 15625/70000*100
+  assert.equal(withCand[0].percentile, 25.71); // 18000/70000*100
   assert.equal(withCand[0].percentileEstimated, false);
   // 2025 有考生数
   assert.equal(withCand[1].percentileEstimated, false);
@@ -291,7 +294,7 @@ test('同一年不同专业分别计入并加权', () => {
   assert.equal(countRecords(state), 2);
   const series = state.schools['S_天津'].series;
   assert.equal(series.length, 1);
-  assert.equal(series[0].close, 250);
+  assert.equal(series[0].close, 300); // (200×10 + 400×10) / 20
 });
 
 test('考生数写入后百分位随之更新', () => {
@@ -301,7 +304,7 @@ test('考生数写入后百分位随之更新', () => {
   applyCandidateRecords(state, [{ year: 2025, province: '天津', candidates: 100000 }]);
   const candle = state.schools['S_天津'].series[0];
   assert.equal(candle.percentileEstimated, false);
-  assert.equal(candle.percentile, 0.15); // 150/100000*100
+  assert.equal(candle.percentile, 0.2); // 200/100000*100
 });
 
 test('applyParsedFile 同时接受记录与考生数', () => {
@@ -331,7 +334,7 @@ test('手动录入覆盖同年记录', () => {
   });
   assert.ok(result.ok);
   assert.equal(countRecords(state), 1);
-  assert.equal(state.schools['S_天津'].series[0].close, 55);
+  assert.equal(state.schools['S_天津'].series[0].close, 60);
 });
 
 test('删除某年后派生数据同步更新', () => {
@@ -350,7 +353,7 @@ test('缓存序列化后可完整还原（含考生数）', () => {
   assert.ok(restored);
   assert.equal(countRecords(restored), 1);
   assert.equal(restored.provinceCandidates['天津'][2025], 100000);
-  assert.equal(restored.schools['S_天津'].series[0].percentile, 0.15);
+  assert.equal(restored.schools['S_天津'].series[0].percentile, 0.2);
 });
 
 test('版本不一致的缓存会被丢弃', () => {
