@@ -21,6 +21,7 @@ param(
   [int]$To = 200,
   [string]$Years = '2026,2025,2024,2023,2022,2021',
   [string]$Out = '',
+  [int]$DelayMs = 150,
   [switch]$DryRun,
   [switch]$NoResume
 )
@@ -80,7 +81,10 @@ function Short-Name([string]$Name) {
   return $Name.Trim()
 }
 
-function Get-Api([hashtable]$Params, [int]$Retry = 4) {
+$script:ThrottleStreak = 0
+$script:TotalThrottles = 0
+
+function Get-Api([hashtable]$Params, [int]$Retry = 5) {
   $query = ($Params.GetEnumerator() | Sort-Object Name | ForEach-Object {
     [uri]::EscapeDataString($_.Key) + '=' + [uri]::EscapeDataString([string]$_.Value)
   }) -join '&'
@@ -89,10 +93,20 @@ function Get-Api([hashtable]$Params, [int]$Retry = 4) {
   for ($attempt = 1; $attempt -le $Retry; $attempt++) {
     try {
       $resp = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = $UA } -TimeoutSec 25
-      if ($resp.code -eq '0000') { return @{ ok = $true; data = $resp.data } }
+      if ($resp.code -eq '0000') { $script:ThrottleStreak = 0; return @{ ok = $true; data = $resp.data } }
       $msg = [string]$resp.message
       if ($msg -match '请求过多|频繁|限流') {
-        Start-Sleep -Milliseconds (700 * $attempt)
+        $script:ThrottleStreak++
+        $script:TotalThrottles++
+        # 熔断：连续撞限流说明整条线被掐了，单次重试没用，得整段停一会儿
+        if ($script:ThrottleStreak -ge 3) {
+          $pause = [Math]::Min(300, 30 * $script:ThrottleStreak)
+          Write-Host ("  连续被限流，整体暂停 {0} 秒再继续…" -f $pause) -ForegroundColor Yellow
+          Start-Sleep -Seconds $pause
+          $script:ThrottleStreak = 0
+        } else {
+          Start-Sleep -Milliseconds (1200 * $attempt)
+        }
         continue
       }
       return @{ ok = $false; error = "code $($resp.code): $msg" }
@@ -250,6 +264,10 @@ foreach ($task in $tasks) {
 
   $done[$task.Key] = $true
   $finished++
+
+  # 主动控速：与其撞上限流再退避重试，不如一开始就慢一点——
+  # 咱们实测下来持续 1–2 个任务/秒很稳，撞上去反而更慢。
+  if ($DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
 
   if ($finished % 10 -eq 0) {
     Save-Progress $done $progressFile
