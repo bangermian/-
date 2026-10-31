@@ -127,7 +127,8 @@ foreach ($r in $baseRows) {
   )) + "`r`n")
 }
 
-$enc = New-Object System.Text.UTF8Encoding($false)
+# 带 BOM：不然 Excel 打开中文全是乱码
+$enc = New-Object System.Text.UTF8Encoding($true)
 [System.IO.File]::WriteAllText($outFile, $sb.ToString(), $enc)
 
 $total = $baseRows.Count

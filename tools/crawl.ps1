@@ -50,8 +50,15 @@ $ProvinceIds = @{
 
 # ------------------------------ 小工具 ------------------------------
 
+# CSV 一律写 UTF-8 **带 BOM**：Excel 不带 BOM 会按 GBK 解码，中文全是乱码。
+# 高考顺那边走 SheetJS 解析，BOM 会自动跳过，不影响导入。
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
   $enc = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Text, $enc)
+}
+
+function Write-Utf8Bom([string]$Path, [string]$Text) {
+  $enc = New-Object System.Text.UTF8Encoding($true)
   [System.IO.File]::WriteAllText($Path, $Text, $enc)
 }
 
@@ -142,6 +149,9 @@ $script:AvailabilityCache = @{}
 $script:StatSkip = 0
 $script:StatPlanFilled = 0
 $script:StatPlanPartial = 0
+$script:StatPlanFilledByQuery = 0
+$script:StatPlanAll = 0
+$script:StatPlanMatched = 0
 
 <#
   school/{id}/dic/provincescore.json 说明「这所学校在各省有哪些年份、有哪些专业组」。
@@ -185,10 +195,10 @@ function Get-SchoolAvailability([string]$schoolId) {
 }
 
 <# 按专业组拉一页招生计划（第 1 页免签名） #>
-function Get-PlanPage([string]$schoolId, [int]$year, [string]$batch, [string]$group, [string]$typeId) {
+function Get-PlanPage([string]$schoolId, [int]$year, [string]$batch, [string]$group, [string]$typeId, [string]$likeName = '') {
   $body = @{
     autosign          = ''
-    like_spname       = ''
+    like_spname       = $likeName
     local_batch_id    = $batch
     local_province_id = [string]$provinceId
     local_type_id     = $typeId
@@ -276,7 +286,7 @@ if (-not (Test-Path $cacheDir)) { New-Item -ItemType Directory -Path $cacheDir -
 
 $head = '年份,招生省份,院校名称,院校所在地,板块,专业名称,最高分,最低分,最高位次,最低位次,录取人数'
 $needHeader = -not (Test-Path $outFile) -or (Get-Item $outFile).Length -eq 0
-if ($needHeader) { Write-Utf8NoBom $outFile ($head + "`r`n") }
+if ($needHeader) { Write-Utf8Bom $outFile ($head + "`r`n") }
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $finished = 0
@@ -378,12 +388,40 @@ foreach ($task in $tasks) {
         if ($null -eq $num) { continue }
         if (-not $planByMajor.ContainsKey($pn)) { $planByMajor[$pn] = 0 }
         $planByMajor[$pn] = [int]$planByMajor[$pn] + [int]$num
+        $script:StatPlanAll += [int]$num
       }
       if ($DelayMs -gt 0 -and $planGroups.Count -gt 1) {
         Start-Sleep -Milliseconds ([Math]::Max(60, [int]($DelayMs / 2)))
       }
     }
     if ($groupPartial -gt 0) { $script:StatPlanPartial++ }
+
+    # 补漏：被 10 条上限截断的组里，有些专业没出现在抓到的几页里。
+    # like_spname 只有在**带专业组**时才真正生效（不带组会被忽略，返回默认前 10 条），
+    # 所以对每个缺人数的专业，逐个组试，命中就停。
+    $missing = @($groups.Keys | Where-Object { -not $planByMajor.ContainsKey($_) })
+    if ($missing.Count -gt 0 -and $missing.Count -le 25 -and @($planGroups).Count -gt 0) {
+      foreach ($mn in $missing) {
+        foreach ($pg in @($planGroups)) {
+          $one = Get-PlanPage $sid $year $pg.Batch $pg.Group $typeId $mn
+          $sum = 0
+          $hit = $false
+          foreach ($it in $one.items) {
+            if ((Short-Name ([string]$it.sp_name)) -ne $mn) { continue }
+            $num = ConvertTo-Number $it.num
+            if ($null -eq $num) { continue }
+            $sum += [int]$num
+            $hit = $true
+          }
+          if ($hit -and $sum -gt 0) {
+            $planByMajor[$mn] = $sum
+            $script:StatPlanFilledByQuery++
+            break
+          }
+          if ($DelayMs -gt 0) { Start-Sleep -Milliseconds ([Math]::Max(40, [int]($DelayMs / 2))) }
+        }
+      }
+    }
   }
 
   $sb = New-Object System.Text.StringBuilder
@@ -394,6 +432,7 @@ foreach ($task in $tasks) {
     } elseif ($planByMajor.ContainsKey($g.Major) -and $planByMajor[$g.Major] -gt 0) {
       $vol = $planByMajor[$g.Major]
       $script:StatPlanFilled++
+      $script:StatPlanMatched += [int]$vol
     }
     $maxScore = ''
     if ($null -ne $g.MaxScore) { $maxScore = $g.MaxScore }
@@ -431,7 +470,15 @@ Write-Host ''
 Write-Host ("  完成：{0} 个任务，{1} 行，失败 {2} 个，耗时 {3:N1} 秒" -f $finished, $rowsWritten, $failed, $sw.Elapsed.TotalSeconds) -ForegroundColor Green
 if ($script:StatSkip -gt 0) { Write-Host ("  跳过（站点无该年数据）：{0} 个" -f $script:StatSkip) -ForegroundColor DarkGray }
 if ($script:StatPlanFilled -gt 0) { Write-Host ("  人数由招生计划补齐：{0} 行" -f $script:StatPlanFilled) -ForegroundColor Green }
-if ($script:StatPlanPartial -gt 0) { Write-Host ("  有 {0} 个「校×年」的专业组超过 10 条，计划数只取到前 10 条" -f $script:StatPlanPartial) -ForegroundColor Yellow }
+if ($script:StatPlanPartial -gt 0) { Write-Host ("  有 {0} 个「校×年」的专业组超过 10 条，其中靠按名补漏又补回 {1} 个专业" -f $script:StatPlanPartial, $script:StatPlanFilledByQuery) -ForegroundColor Yellow }
 if ($script:TotalThrottles -gt 0) { Write-Host ("  被限流 {0} 次（已自动退避）" -f $script:TotalThrottles) -ForegroundColor Yellow }
+if ($script:StatPlanAll -gt 0) {
+  $gap = $script:StatPlanAll - $script:StatPlanMatched
+  $note = "  该省计划合计 {0} 人，其中 {1} 人落在有分数线的专业上" -f $script:StatPlanAll, $script:StatPlanMatched
+  Write-Host $note -ForegroundColor DarkGray
+  if ($gap -gt 0) {
+    Write-Host ("  另有 {0} 人不体现在本表：提前批/小语种等专业没有分数线数据，或所在专业组超过 10 条被截断" -f $gap) -ForegroundColor DarkGray
+  }
+}
 Write-Host "  输出：$outFile" -ForegroundColor Green
 Write-Host '  拖进高考顺就能加载；也可以再跑 merge-plan.ps1 用插件数据补人数。' -ForegroundColor DarkGray
