@@ -467,13 +467,18 @@
   const provincelineUrl = (id, year) => `https://www.gaokao.cn/school/${id}/provinceline?year=${year}`;
 
   function startDetailQueue(ids, years) {
-    const queue = [];
-    for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year) });
-    state.detail.queue = queue;
-    state.detail.index = 0;
-    state.detail.running = true;
-    saveState();
-    gotoDetailTask();
+    try {
+      const queue = [];
+      for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year) });
+      state.detail.queue = queue;
+      state.detail.index = 0;
+      state.detail.running = true;
+      saveState();
+      gotoDetailTask();
+    } catch (e) {
+      window.__sdErr = `${e && e.message}\n${(e && e.stack) || ''}`;
+      throw e;
+    }
   }
 
   function stopDetailQueue() {
@@ -491,7 +496,11 @@
       log(`专业明细采集完成：${Object.keys(detailStore()).length} 个「院校×年份」`);
       return;
     }
-    location.href = provincelineUrl(task.id, task.year);
+    const next = provincelineUrl(task.id, task.year);
+    log(`跳转 ${task.id} ${task.year}`);
+    // 用 assign 而不是给 href 赋值：个别页面会给 location.href 装 setter，
+    // 直接赋值可能被静默吞掉（这次就踩到了，表现是"点了没反应"）。
+    try { window.location.assign(next); } catch { window.location.href = next; }
   }
 
   /** 把钩子收到的原始条目去重整理 */
@@ -500,7 +509,9 @@
     const majors = [];
     for (const items of GK_NET.special) {
       for (const it of items) {
-        const key = it.school_special_id || `${it.sp_name}|${it.sg_name}|${it.min}|${it.min_section}`;
+        // 去重键不能用 school_special_id：同校多个专业会重复，
+        // 会把 15 条压成 7 条（踩过）。用全字段组合。
+        const key = [it.sp_name, it.remark, it.sg_name, it.min, it.min_section, it.lq_num].join('\u0001');
         if (seen.has(key)) continue;
         seen.add(key);
         majors.push({
@@ -547,13 +558,28 @@
     );
     if (!first) return null;
 
-    const maxPage = Math.max(1, ...pageNumbers());
-    for (let p = 2; p <= maxPage; p += 1) {
+    // 分页器是数据回来之后才渲染的，必须等它出现，
+    // 否则 pageNumbers() 为空 → maxPage 算成 1 → 后面几页全丢（这个坑踩过一次）
+    await waitFor(() => pageNumbers().length > 0, 6000, 300);
+    await sleep(1000);   // 等 React 把分页器的 click 处理器挂上
+
+    let page = 1;
+    const nums0 = pageNumbers();
+    log(`明细翻页：页码 ${JSON.stringify(nums0)}，已收 ${GK_NET.special.length} 组`);
+    for (let guard = 0; guard < 20; guard += 1) {
+      const nums = pageNumbers();
+      const maxPage = nums.length ? Math.max(...nums) : 1;
+      if (page >= maxPage) break;
+
+      const target = page + 1;
       const before = GK_NET.special.length;
-      if (!clickPlanPage(p)) break;
-      await waitFor(() => GK_NET.special.length > before, 6000, 300);
-      await sleep(500);
+      if (!clickPlanPage(target)) { log(`第 ${target} 页点不到`); break; }
+      const grew = await waitFor(() => GK_NET.special.length > before, 8000, 300);
+      if (!grew) { log(`第 ${target} 页点了没反应`); break; }
+      page = target;
+      await sleep(400);
     }
+    log(`明细翻页结束：到第 ${page} 页，共 ${GK_NET.special.length} 组`);
     return collectCaptured();
   }
 
@@ -860,29 +886,40 @@
       <div class="gk-body">
         <div class="gk-status" style="color:#9aa6bd;margin-bottom:8px;"></div>
 
-        <details class="gk-sec-a" ${IS_GK ? 'open' : ''}>
-          <summary style="cursor:pointer;color:#f39c12;">掌上高考批量</summary>
+        <label style="display:block;margin-bottom:6px;">招生省份
+          <select class="gk-province" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
+            ${provinceOptions}
+          </select>
+        </label>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <label style="flex:1;">名次从
+            <input class="gk-rank-from" type="number" min="1" max="${SCHOOLS.length}" value="${state.rankFrom}" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
+          </label>
+          <label style="flex:1;">到
+            <input class="gk-rank-to" type="number" min="1" max="${SCHOOLS.length}" value="${state.rankTo}" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
+          </label>
+        </div>
+        <label style="display:block;margin-bottom:6px;">抓最近几年
+          <select class="gk-year-count" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
+            ${[1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}"${n === state.yearCount ? ' selected' : ''}>最近 ${n} 年（${YEARS.slice(0, n).join('、')}）</option>`).join('')}
+          </select>
+        </label>
+        <div class="gk-range-hint" style="color:#6b7793;font-size:10px;margin-bottom:6px;"></div>
+
+        <button class="gk-onestep" style="width:100%;padding:9px;background:#ec0000;color:#fff;border:none;border-radius:5px;font-weight:700;font-size:13px;cursor:pointer;margin-bottom:6px;">一键抓取</button>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <button class="gk-detail-stop" style="flex:1;padding:6px;background:#4a5568;color:#fff;border:none;border-radius:5px;cursor:pointer;">停止</button>
+          <button class="gk-detail-export" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出总表</button>
+        </div>
+        <div class="gk-detail-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;margin-bottom:6px;"></div>
+
+        <details class="gk-sec-more">
+          <summary style="cursor:pointer;color:#6b7793;font-size:11px;">分项功能（一般不用）</summary>
+
+        <details class="gk-sec-a">
+          <summary style="cursor:pointer;color:#f39c12;">掌上高考批量（旧：只抓院校线）</summary>
           <div style="padding-top:8px;">
-            <label style="display:block;margin-bottom:6px;">招生省份
-              <select class="gk-province" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
-                ${provinceOptions}
-              </select>
-            </label>
-            <div style="display:flex;gap:6px;margin-bottom:6px;">
-              <label style="flex:1;">名次从
-                <input class="gk-rank-from" type="number" min="1" max="${SCHOOLS.length}" value="${state.rankFrom}" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
-              </label>
-              <label style="flex:1;">到
-                <input class="gk-rank-to" type="number" min="1" max="${SCHOOLS.length}" value="${state.rankTo}" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
-              </label>
-            </div>
-            <label style="display:block;margin-bottom:6px;">抓最近几年
-              <select class="gk-year-count" style="width:100%;margin-top:4px;background:#0b1a33;color:#fff;border:1px solid #0f3460;border-radius:4px;padding:4px;">
-                ${[1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}"${n === state.yearCount ? ' selected' : ''}>最近 ${n} 年（${YEARS.slice(0, n).join('、')}）</option>`).join('')}
-              </select>
-            </label>
-            <div class="gk-range-hint" style="color:#6b7793;font-size:10px;margin-bottom:6px;"></div>
-            <button class="gk-batch" style="width:100%;padding:7px;background:#ec0000;color:#fff;border:none;border-radius:5px;font-weight:700;cursor:pointer;margin-bottom:6px;">批量抓院校线</button>
+            <button class="gk-batch" style="width:100%;padding:7px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;margin-bottom:6px;">批量抓院校线</button>
             <div style="display:flex;gap:6px;">
               <button class="gk-one" style="flex:1;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;">抓当前页</button>
               <button class="gk-export-gk" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出院校线</button>
@@ -944,6 +981,7 @@
               <button class="gk-export-seg" style="flex:1;padding:6px;background:#8e44ad;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出一分一段</button>
             </div>
           </div>
+        </details>
         </details>
 
         <div class="gk-log" style="margin-top:8px;color:#6b7793;font-size:11px;max-height:80px;overflow:auto;"></div>
@@ -1039,6 +1077,23 @@
     $('.gk-plan-stop').addEventListener('click', () => {
       stopPlanQueue();
       log('已停止招生计划采集');
+    });
+
+    /* ---------- 一键抓取 ---------- */
+    $('.gk-onestep').addEventListener('click', () => {
+      if (state.detail.running || state.plan.running || state.running) {
+        alert('还有采集任务在跑，先点「停止」'); return;
+      }
+      const list = selectedSchools();
+      if (!list.length) { alert('这个名次区间里没有学校'); return; }
+      const total = list.length * state.yearCount;
+      const minutes = Math.max(1, Math.ceil((total * 6) / 60));
+      const msg = `一键抓取\n\n`
+        + `范围：第 ${state.rankFrom}–${state.rankTo} 名，共 ${list.length} 所 × ${state.yearCount} 年 = ${total} 个页面\n`
+        + `内容：院校线 + 每个专业的最低分 / 最低位次 / 录取人数\n`
+        + `预计：约 ${minutes} 分钟，可随时停止，进度会保留\n\n开始？`;
+      if (!confirm(msg)) return;
+      startDetailQueue(list.map((s) => String(s[1])), selectedYears());
     });
 
     /* ---------- 专业明细 ---------- */
