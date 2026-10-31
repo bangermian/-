@@ -28,7 +28,7 @@ echo.
 echo   Keep this window open. Close it to stop automation.
 echo.
 
-start "" "%CHROME%" --remote-debugging-port=9222 --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check "https://www.gaokao.cn/"
+start "" "%CHROME%" --remote-debugging-port=9222 --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-features=IntensiveWakeUpThrottling,CalculateNativeWinOcclusion "https://www.gaokao.cn/"
 
 timeout /t 3 >nul
 echo   Waiting for the window... you can close this console now.

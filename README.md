@@ -206,6 +206,27 @@ node tools/crawl.mjs --province 天津 --from 1 --to 200 --years 2026,2025,2024
 
 > 换 IP（代理/VPN）确实能绕过单 IP 限制，但那是规避站点的访问控制，
 > 违反使用条款，也可能连累账号，本工具不做这个。
+#### 后台运行：关掉浏览器的后台节流
+
+Chrome / Edge 会把**后台标签页**降频（定时器最低 1 分钟一次），超过 5 分钟直接冻结。
+采集器是靠轮询等数据到达的，一冻结就停摆。
+
+**Edge 不会更好**：它同为 Chromium 内核，还额外有「睡眠标签页」（Sleeping Tabs），
+比 Chrome 更主动地挂起后台页。
+
+解决办法是用带参数的窗口启动。仓库里提供了 **`启动抓取窗口.cmd`**，它用独立配置
+（`.chrome-auto`）启动 Chrome，并带上这几个开关：
+
+| 参数 | 作用 |
+|---|---|
+| `--disable-background-timer-throttling` | 后台标签页的定时器不降频 |
+| `--disable-backgrounding-occluded-windows` | 被遮挡的窗口不算后台 |
+| `--disable-renderer-backgrounding` | 后台渲染进程不降优先级 |
+| `--disable-features=IntensiveWakeUpThrottling,CalculateNativeWinOcclusion` | 关掉「5 分钟后冻结」 |
+
+效果：窗口最小化或被别的窗口盖住，采集照常跑，你可以同时干别的。
+
+注意：**同配置的窗口已经开着时，新启动会复用旧实例，参数不生效**——先关掉再启动。
 #### 招生人数怎么进表
 
 **人数以插件为准，分数用直连抓。** 两者合并后完全一致（已核对：北京大学 2022 共 20 个专业、合计 36 人，逐行零差异）。
