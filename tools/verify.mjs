@@ -433,14 +433,35 @@ test('分数 → 位次：落在哪一档取哪一档的累计人数', () => {
 
 test('只有分数时导入会自动补上位次', () => {
   const state = createState();
-  applySegmentRecords(state, [{ province: '天津', year: 2025, score: 680, cumulative: 300 }]);
+  applySegmentRecords(state, [
+    { province: '天津', year: 2025, score: 680, cumulative: 300 },
+    { province: '天津', year: 2025, score: 679, cumulative: 350 },
+  ]);
   const result = applyRecords(state, [{
     year: 2025, school: 'S', province: '天津', location: '天津', plate: 's11',
-    major: 'A', highScore: null, lowScore: 685, highRank: null, lowRank: null, volume: 0,
+    major: 'A', highScore: null, lowScore: 679, highRank: null, lowRank: null, volume: 0,
   }]);
   assert.equal(result.added, 1);
   assert.equal(result.converted, 1);
-  assert.equal(state.schools['S_天津'].series[0].close, 300);
+  // 679 是表里真实存在的档位，直接用累计人数，不做估算
+  assert.equal(state.schools['S_天津'].series[0].close, 350);
+});
+
+test('高分段（表里最高档以上）用指数衰减估算位次', () => {
+  const state = createState();
+  applySegmentRecords(state, [
+    { province: '天津', year: 2025, score: 680, cumulative: 300 },
+    { province: '天津', year: 2025, score: 679, cumulative: 350 },
+  ]);
+  // λ = ln(300/350) ≈ -0.1542；685 分 → 300·e^(-0.771) ≈ 139
+  assert.equal(rankForScore(state, '天津', 2025, 685), 139);
+  // 表里有的档位仍是真实值
+  assert.equal(rankForScore(state, '天津', 2025, 680), 300);
+  // 外推到离谱的分数，至少第 1 名，不会出现 0 或负数
+  const extreme = rankForScore(state, '天津', 2025, 780);
+  assert.ok(extreme >= 1, `应 ≥ 1，实际 ${extreme}`);
+  // 分数越高，估算位次越小
+  assert.ok(rankForScore(state, '天津', 2025, 690) < rankForScore(state, '天津', 2025, 685));
 });
 
 test('既无位次也换算不了的行会被跳过并计数', () => {

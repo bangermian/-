@@ -145,9 +145,43 @@ export function rankForScore(state, province, year, score) {
   const table = segmentTableFor(state, province, year);
   if (!table || !Number.isFinite(score)) return null;
   for (const row of table) {
-    if (score >= row.score) return row.cumulative;
+    if (score >= row.score) {
+      // 一分一段表最高的一档往往是区间（如「680-750」），被解析成 680。
+      // 比它还高的分数没有直接数据，用指数衰减外推估一个位次，
+      // 否则 700 分会被当成 680 分那一档（位次被高估，学校显得更好考）。
+      if (row === table[0] && score > row.score) {
+        return estimateRankAboveTop(table, score);
+      }
+      return row.cumulative;
+    }
   }
   return null;
+}
+
+/**
+ * 高分段的位次估算。
+ *
+ * 假设该省高分尾部的人数随分数呈指数衰减：C(s) = C(top) · exp(λ·(s - top))，
+ * λ 用表里最上面两档的实际衰减率估出来（ln(C(top)/C(top+1))，为负）。
+ * 例如天津 2026：680 分及以上 197 人、679 分及以上 229 人，
+ * λ = ln(197/229) ≈ -0.150，于是 700 分 ≈ 197·e^(-3) ≈ 10 名。
+ *
+ * 样本太少或数据异常时 λ 会被夹到 [-0.6, -0.01]，避免算出离谱的 0 或天文数字。
+ * 结果至少为 1。
+ */
+export function estimateRankAboveTop(table, score) {
+  const top = table?.[0];
+  if (!top || !Number.isFinite(top.score) || !(top.cumulative > 0)) return null;
+
+  const next = table[1];
+  let lambda = -0.15;
+  if (next && next.cumulative > top.cumulative && next.score < top.score) {
+    const raw = Math.log(top.cumulative / next.cumulative) / (top.score - next.score);
+    if (Number.isFinite(raw)) lambda = Math.min(-0.01, Math.max(-0.6, raw));
+  }
+
+  const gap = Math.max(0, Number(score) - top.score);
+  return Math.max(1, Math.round(top.cumulative * Math.exp(lambda * gap)));
 }
 
 /** 已有哪些省份/年份的一分一段表 */

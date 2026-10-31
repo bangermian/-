@@ -381,23 +381,34 @@
 
   /** 把当前页（含翻页）的所有专业计划加总 */
   async function collectPlanOnPage() {
-    const ready = await waitFor(() => document.querySelectorAll('table tr').length > 1, 15000, 500);
+    const ready = await waitFor(() => document.querySelectorAll('table tr').length > 1, 15000, 300);
     if (!ready) return { total: 0, rows: 0, majors: [] };
+
+    await waitFor(() => pageNumbers().length > 0, 4000, 150);
 
     let total = 0;
     let rows = 0;
     const majors = [];
-    for (let page = 1; page <= 15; page += 1) {
+    let page = 1;
+    for (let guard = 0; guard < 20; guard += 1) {
       const data = readPlanPage();
       if (!data) break;
       total += data.sum;
       rows += data.parsed;
       majors.push(...data.majors);
-      if (data.rows < 10) break;          // 不满一页 → 到底了
+
+      // 不能靠"行数不满一页"判断结尾：有的表每页只有 8 行，会一刀切掉后面所有页。
+      // 改成点下一页、看有没有触发新请求。
+      const nums = pageNumbers();
+      const maxPage = nums.length ? Math.max(...nums) : 1;
+      if (page >= maxPage) break;
+
       const before = planRequestCount();
       if (!clickPlanPage(page + 1)) break;
-      await sleep(1500);
-      if (planRequestCount() <= before) break;
+      const grew = await waitFor(() => planRequestCount() > before, 6000, 150);
+      if (!grew) break;
+      page += 1;
+      await sleep(150);
     }
     return { total, rows, majors };
   }
@@ -471,7 +482,8 @@
   function startDetailQueue(ids, years) {
     try {
       const queue = [];
-      for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year) });
+      // phase: 'detail' 抓分数线；缺人数时会插入一条 phase:'plan' 补计划数
+      for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year), phase: 'detail' });
       state.detail.queue = queue;
       state.detail.index = 0;
       state.detail.running = true;
@@ -498,11 +510,61 @@
       log(`专业明细采集完成：${Object.keys(detailStore()).length} 个「院校×年份」`);
       return;
     }
-    const next = provincelineUrl(task.id, task.year);
-    log(`跳转 ${task.id} ${task.year}`);
+    // 一条任务两段：先抓分数线（detail），缺人数的年份再补一趟招生计划（plan）
+    const next = task.phase === 'plan'
+      ? `https://www.gaokao.cn/school/${task.id}/sturule?year=${task.year}`
+      : provincelineUrl(task.id, task.year);
+    log(`跳转 ${task.id} ${task.year}${task.phase === 'plan' ? '（补计划数）' : ''}`);
     // 用 assign 而不是给 href 赋值：个别页面会给 location.href 装 setter，
     // 直接赋值可能被静默吞掉（这次就踩到了，表现是"点了没反应"）。
     try { window.location.assign(next); } catch { window.location.href = next; }
+  }
+
+  /**
+   * 用招生计划里的「计划招生」补上缺失的录取人数。
+   * 站点只对 2024/2025 公布专业级录取人数，2021–2023 大量是 "-"，
+   * 但招生计划页每年都有计划数，按专业名对得上就能补。
+   */
+  function mergePlanIntoDetail(schoolId, year, planMajors) {
+    const rec = detailStore()[`${schoolId}|${year}`];
+    if (!rec || !planMajors?.length) return 0;
+
+    // 招生计划的专业名末尾多一段「选科要求：物理必选」，分数线那边没有，
+    // 不剥掉就一条都对不上（实际踩到过：补上 0 个人数）
+    const norm = (s) => String(s || '')
+      .replace(/选科要求[：:][^）)]*$/g, '')
+      .replace(/[\s\u3000]+/g, '');
+    const main = (s) => norm(s).replace(/[（(].*$/, '');
+
+    const byFull = new Map();
+    const byMain = new Map();
+    for (const p of planMajors) {
+      const full = norm(p.name);
+      byFull.set(full, (byFull.get(full) || 0) + (Number(p.plan) || 0));
+      const m = main(p.name);
+      if (!byMain.has(m)) byMain.set(m, []);
+      byMain.get(m).push(Number(p.plan) || 0);
+    }
+
+    let filled = 0;
+    for (const mj of rec.majors) {
+      if (mj.volume != null) continue;              // 已有真实录取人数，不动
+      const full = norm(mj.major);
+      if (byFull.has(full) && byFull.get(full) > 0) {
+        mj.volume = byFull.get(full);
+        mj.volumeFrom = 'plan';
+        filled += 1;
+        continue;
+      }
+      // 退一步只按主名匹配；同名有多条（不同专业组）时不猜，留空
+      const list = byMain.get(main(mj.major));
+      if (list && list.length === 1 && list[0] > 0) {
+        mj.volume = list[0];
+        mj.volumeFrom = 'plan';
+        filled += 1;
+      }
+    }
+    return filled;
   }
 
   /** 把钩子收到的原始条目去重整理 */
@@ -593,10 +655,13 @@
   /** 队头命中当前页就采，然后跳到下一条 */
   async function runDetailTaskIfNeeded() {
     if (!state.detail.running || !IS_GK) return;
-    if (!/\/provinceline/.test(location.pathname)) return;
 
     const task = state.detail.queue[state.detail.index];
     if (!task) { state.detail.running = false; saveState(); render(); return; }
+
+    const isPlanPhase = task.phase === 'plan';
+    const wantPath = isPlanPhase ? /\/sturule/ : /\/provinceline/;
+    if (!wantPath.test(location.pathname)) return;
 
     const id = currentSchoolId();
     const urlYear = new URL(location.href).searchParams.get('year');
@@ -604,6 +669,20 @@
 
     const meta = schoolById.get(String(task.id));
     const name = meta ? meta[2] : `学校${task.id}`;
+
+    if (isPlanPhase) {
+      // 第二段：抓招生计划，把缺失的录取人数补上
+      const plan = await collectPlanOnPage();
+      const filled = mergePlanIntoDetail(task.id, task.year, plan?.majors ?? []);
+      log(`${name} ${task.year}：计划表 ${plan?.majors?.length ?? 0} 条专业，补上 ${filled} 个人数`);
+      state.detail.index += 1;
+      saveState();
+      render();
+      await sleep(DETAIL_GAP);
+      gotoDetailTask();
+      return;
+    }
+
     log(`明细采集中：${name} ${task.year}`);
 
     // 注意：不要在这里清空 GK_NET —— 每次跳转都是新文档，缓冲区本来就是空的；
@@ -620,7 +699,15 @@
         majors: data.majors,
         school: data.school,
       };
-      log(`${name} ${task.year}：${data.majors.length} 个专业 / ${data.school.length} 条院校线`);
+      const missing = data.majors.filter((m) => m.volume == null).length;
+      log(`${name} ${task.year}：${data.majors.length} 个专业 / ${data.school.length} 条院校线${missing ? `（${missing} 个缺人数）` : ''}`);
+
+      // 缺人数就插一条「补计划」任务，紧跟在这一条后面
+      if (missing > 0) {
+        state.detail.queue.splice(state.detail.index + 1, 0, {
+          id: task.id, year: task.year, phase: 'plan',
+        });
+      }
     } else {
       log(`${name} ${task.year}：没抓到数据（可能该年未公布）`);
     }
