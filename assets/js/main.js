@@ -14,7 +14,7 @@ import { computeIndices } from './indices.js';
 import { parseWorkbookFile } from './parser.js';
 import {
   addMajorRecord, applyParsedFile, applyPlanRecords, applyRecords, applySegmentRecords,
-  countMissingCandidates, countRecords, createState, deserialize,
+  countDerivedCandidates, countMissingCandidates, countRecords, createState, deserialize,
   listLocations, listMajors, listSchools, planFor, removeYear, schoolKey, serialize,
 } from './state.js';
 import { parsePastedTable, sumPlan } from './paste.js';
@@ -652,9 +652,14 @@ async function processFiles(files, options = {}) {
     toast(`${skippedRows} 行既没有位次、也无法用分数换算，已跳过（先加载一分一段表再导入可解决）`, 'err', 8000);
   }
 
+  const derived = countDerivedCandidates(state);
+  if (derived > 0) {
+    toast(`${derived} 个「院校-年份」的考生数由一分一段表反推（末行累计人数）`, 'ok', 6000);
+  }
+
   const missing = countMissingCandidates(state);
   if (missing > 0) {
-    toast(`${missing} 个「院校-年份」没有考生数，百分位按 7 万估算（可在模板里的「考生数」表补齐）`, 'err', 8000);
+    toast(`${missing} 个「院校-年份」没有考生数，百分位按 7 万估算（补一份一分一段表即可自动推导）`, 'err', 8000);
   }
   reportProblems(skipped, failed, '跳过', '失败', auto);
 }

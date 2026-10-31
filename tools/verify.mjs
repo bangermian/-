@@ -16,7 +16,7 @@ import {
 import {
   addMajorRecord, applyCandidateRecords, applyParsedFile, applyPlanRecords, applyRecords,
   applySegmentRecords, countMissingCandidates, countRecords, createState, deserialize,
-  rankForScore, removeYear, serialize,
+  candidatesSource, rankForScore, removeYear, serialize,
 } from '../assets/js/state.js';
 import { parsePastedTable, sumPlan } from '../assets/js/paste.js';
 
@@ -305,6 +305,38 @@ test('考生数写入后百分位随之更新', () => {
   const candle = state.schools['S_天津'].series[0];
   assert.equal(candle.percentileEstimated, false);
   assert.equal(candle.percentile, 0.2); // 200/100000*100
+});
+
+test('没有考生数时，用一分一段表的末行累计人数反推', () => {
+  const state = createState();
+  applyRecords(state, [record({ highRank: 100, lowRank: 200, volume: 10 })]);
+  // 一分一段：累计人数最大值就是该年考生规模
+  applySegmentRecords(state, [
+    { province: '天津', year: 2025, score: 690, cumulative: 300 },
+    { province: '天津', year: 2025, score: 680, cumulative: 1200 },
+    { province: '天津', year: 2025, score: 670, cumulative: 52000 },
+  ]);
+  const candle = state.schools['S_天津'].series[0];
+  assert.equal(candle.candidates, 52000);
+  assert.equal(candle.percentile, 0.38); // 200/52000*100 ≈ 0.3846 → 0.38
+  assert.equal(candidatesSource(state, '天津', 2025), 'segment');
+});
+
+test('显式填的考生数优先于一分一段推导', () => {
+  const state = createState();
+  applyRecords(state, [record({ highRank: 100, lowRank: 200, volume: 10 })]);
+  applySegmentRecords(state, [{ province: '天津', year: 2025, score: 670, cumulative: 52000 }]);
+  applyCandidateRecords(state, [{ year: 2025, province: '天津', candidates: 74000 }]);
+  const candle = state.schools['S_天津'].series[0];
+  assert.equal(candle.candidates, 74000);
+  assert.equal(candidatesSource(state, '天津', 2025), 'declared');
+});
+
+test('两者都没有时才算缺失', () => {
+  const state = createState();
+  applyRecords(state, [record({ highRank: 100, lowRank: 200, volume: 10 })]);
+  assert.equal(candidatesSource(state, '天津', 2025), 'missing');
+  assert.equal(countMissingCandidates(state), 1);
 });
 
 test('applyParsedFile 同时接受记录与考生数', () => {

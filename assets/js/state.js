@@ -29,9 +29,34 @@ export function schoolKey(school, province) {
   return `${school}_${province}`;
 }
 
-/** 某省逐年的考生数 */
+/**
+ * 某省逐年的考生数。
+ *
+ * 优先用「考生数」表里明确填的数字；没有的话，用该省该年一分一段表的
+ * **末行累计人数**反推——那就是这一年该科类的有效考生规模。
+ * 一份一分一段表同时解决「分数→位次」和「分母是多少」两件事。
+ */
 export function candidatesFor(state, province) {
-  return state.provinceCandidates[province] ?? {};
+  const declared = state.provinceCandidates?.[province] ?? {};
+  const derived = {};
+
+  for (const [year, rows] of Object.entries(state.segments?.[province] ?? {})) {
+    if (Number.isFinite(declared[year]) && declared[year] > 0) continue;
+    const max = (rows ?? []).reduce((m, row) => Math.max(m, Number(row.cumulative) || 0), 0);
+    if (max > 0) derived[year] = max;
+  }
+
+  // 用户填的优先于推导的
+  return { ...derived, ...declared };
+}
+
+/** 考生数从哪来的：declared（填的）/ segment（一分一段推导）/ missing */
+export function candidatesSource(state, province, year) {
+  const declared = state.provinceCandidates?.[province]?.[year];
+  if (Number.isFinite(declared) && declared > 0) return 'declared';
+  const rows = state.segments?.[province]?.[year];
+  if (rows && rows.some((row) => Number(row.cumulative) > 0)) return 'segment';
+  return 'missing';
 }
 
 /** 重建单个院校的 K 线 */
@@ -88,12 +113,21 @@ export function applySegmentRecords(state, list) {
     touched.add(`${item.province}|${item.year}`);
   }
   // 按分数降序整理，并去重（同分保留最后一条）
+  const touchedProvinces = new Set();
   for (const key of touched) {
     const [province, year] = key.split('|');
+    touchedProvinces.add(province);
     const rows = state.segments[province][year];
     const dedup = new Map(rows.map((r) => [r.score, r]));
     state.segments[province][year] = [...dedup.values()].sort((a, b) => b.score - a.score);
   }
+
+  // 一分一段表会改变「考生数」（末行累计人数）→ 百分位要重算，
+  // 所以这些省份的院校必须重建，否则页面还在用旧的 7 万估算。
+  for (const key of Object.keys(state.schools)) {
+    if (touchedProvinces.has(state.schools[key].province)) rebuildSchool(state, key);
+  }
+
   return touched.size;
 }
 
@@ -373,6 +407,17 @@ export function countMissingCandidates(state) {
     }
   }
   return missing;
+}
+
+/** 有多少个「院校-年份」的考生数是从一分一段表反推出来的 */
+export function countDerivedCandidates(state) {
+  let derived = 0;
+  for (const item of Object.values(state.schools)) {
+    for (const candle of item.series ?? []) {
+      if (candidatesSource(state, item.province, candle.year) === 'segment') derived += 1;
+    }
+  }
+  return derived;
 }
 
 /** 专业名列表 */
