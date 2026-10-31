@@ -673,8 +673,17 @@
 
   /** 从页面已发出的请求里找出模板，例如 .../section2021/2026/12/3/1/lists.json */
   function findSegmentTemplate() {
-    const urls = performance.getEntriesByType('resource').map((r) => r.name);
-    return urls.find((u) => /section2021\/\d{4}\/\d+\/\d+\/\d+\/lists\.json/.test(u)) || null;
+    const urls = performance.getEntriesByType('resource').map((r) => r.name)
+      .filter((u) => /section2021\/\d{4}\/\d+\/\d+\/\d+\/lists\.json/.test(u));
+    // 取**最后一条**：在页面上换省份/年份后，最新那次请求才代表当前选择
+    return urls.length ? urls[urls.length - 1] : null;
+  }
+
+  /** 当前一分一段页面上选的省份（优先从标题取，保证和表格内容一致） */
+  function currentSegmentProvince() {
+    const fromTitle = (document.title || '').match(/^(.+?)一分一段/);
+    if (fromTitle) return fromTitle[1].trim();
+    return (localStorage.getItem('localprovincename') || state.province || '').replace(/市$/, '');
   }
 
   async function collectSegments(opts = {}) {
@@ -686,7 +695,7 @@
     const m = tpl.match(/section2021\/(\d{4})\/(\d+)\/(\d+)\/(\d+)\/lists\.json/);
     if (!m) return { ok: false, reason: 'bad-template' };
     const [, , pid, typeId, batchId] = m;
-    const province = localStorage.getItem('localprovincename') || state.province;
+    const province = currentSegmentProvince();
 
     const rows = [];
     let done = 0;
@@ -1007,9 +1016,9 @@
           <summary style="cursor:pointer;color:#f39c12;margin-top:8px;">一分一段表（顺带算出考生总数）</summary>
           <div style="padding-top:8px;">
             <div style="color:#6b7793;font-size:11px;margin-bottom:6px;">
-              先在 <b>/colleges/bypart</b> 页面打开一次，再回来点采集；一次拿 6 年
+              在 <b>/colleges/bypart</b> 页面上选好省份（点地区名，如「北京」），再回来点采集——采的就是你选的那个省
             </div>
-            <button class="gk-seg-fetch" style="width:100%;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;margin-bottom:6px;">采集 6 年一分一段</button>
+            <button class="gk-seg-fetch" style="width:100%;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;margin-bottom:6px;">采集全部年份</button>
             <button class="gk-seg-export" style="width:100%;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出一分一段 CSV</button>
             <div class="gk-seg-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
           </div>
@@ -1205,7 +1214,7 @@
       btn.textContent = '采集中…';
       const r = await collectSegments();
       btn.disabled = false;
-      btn.textContent = '采集 6 年一分一段';
+      btn.textContent = '采集全部年份';
       if (r.ok) log(`一分一段完成：${r.rows} 行 / ${r.years} 年`);
       else alert('没找到一分一段数据源：请先打开 /colleges/bypart（一分一段页）再点采集');
     });
