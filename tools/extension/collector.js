@@ -2,21 +2,28 @@
 // ==UserScript==
 // @name         高考顺 · 数据采集器
 // @namespace    gaokaoshun
-// @version      3.0.0
-// @description  ① 掌上高考批量抓院校分数线 ② 招生计划（招生人数）采集 ③ 任意网页表格抓取 → 导出高考顺模板 CSV
+// @version      4.0.0
+// @description  ① 院校线 / 专业明细（含分数、位次、录取人数）采集 ② 招生计划采集 ③ 任意网页表格抓取 → 导出高考顺模板 CSV
 // @author       gaokaoshun
 // @match        *://*/*
 // @grant        none
-// @run-at       document-idle
+// @run-at       document-start
 // ==/UserScript==
 
 /*
- * 三条采集路径：
+ * 采集路径：
  *   A. 掌上高考批量：从页面自己发出的请求里拿到已签名的 URL，只替换 year 重放，逐校抓 6 年院校线。
  *   A2. 招生计划（招生人数）：
  *       招生计划接口的签名**只有第 1 页能重放**，第 2 页往后会返回 1010800。
  *       所以改走页面本身：用 ?year=YYYY 指定年份 → 合成点击页码让页面自己请求
  *       → 直接读渲染出来的表格，把「计划招生」列求和。
+ *   A3. 专业明细（重点）：
+ *       /school/{id}/provinceline 这一个页面会同时请求
+ *         v1/school/province_score（院校级）和 v1/school/special_score（专业级）
+ *       在 document-start 挂 XHR 钩子，把两份返回原样接住；
+ *       再用合成点击翻页把每页都触发出来。
+ *       专业级返回里带 min / min_section / lq_num —— 最低分、最低位次、录取人数三件套，
+ *       和院校级合并后就是一张「年份×省份×院校×专业」的总表。
  *   B. 通用表格：扫描当前页所有 <table>，自动识别表头并把列映射到高考顺字段，
  *      支持「分数/位次」合并在一个单元格（如 670/1301）的写法。
  *      表头含「分数 + 累计人数」时自动判定为一分一段表，导出成换算表。
@@ -25,7 +32,60 @@
 (function () {
   'use strict';
 
+  /* ---------------- 网络钩子（必须最先装，赶在页面脚本之前） ---------------- */
+  const GK_NET = { special: [], province: [], plan: [] };
+  (function installHook() {
+    try {
+      window.__gkNet = GK_NET;
+      const pushIfMatch = (url, json) => {
+        const u = String(url || '');
+        const items = (json && json.data && json.data.item) || [];
+        if (!items.length) return;
+        if (u.indexOf('special_score') >= 0) GK_NET.special.push(items);
+        else if (u.indexOf('province_score') >= 0) GK_NET.province.push(items);
+        else if (u.indexOf('special_plan') >= 0) GK_NET.plan.push(items);
+      };
+
+      const origFetch = window.fetch;
+      if (origFetch) {
+        window.fetch = function (...args) {
+          return origFetch.apply(this, args).then((resp) => {
+            try {
+              const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
+              if (/special_score|province_score|special_plan/.test(url)) {
+                resp.clone().json().then((json) => pushIfMatch(url, json)).catch(() => {});
+              }
+            } catch { /* ignore */ }
+            return resp;
+          });
+        };
+      }
+
+      const XO = window.XMLHttpRequest;
+      if (XO && XO.prototype) {
+        const origOpen = XO.prototype.open;
+        const origSend = XO.prototype.send;
+        XO.prototype.open = function (method, url, ...rest) {
+          this.__gkUrl = String(url || '');
+          return origOpen.call(this, method, url, ...rest);
+        };
+        XO.prototype.send = function (...args) {
+          const self = this;
+          try {
+            self.addEventListener('load', function () {
+              const u = self.__gkUrl || '';
+              if (!/special_score|province_score|special_plan/.test(u)) return;
+              try { pushIfMatch(u, JSON.parse(self.responseText)); } catch { /* ignore */ }
+            });
+          } catch { /* ignore */ }
+          return origSend.apply(this, args);
+        };
+      }
+    } catch { /* 钩不上就算了，后面的兜底逻辑还能用 DOM */ }
+  })();
+
   const IS_GK = /(^|\.)gaokao\.cn$/.test(location.hostname);
+
 
   /* ============================ 配置 ============================ */
 
@@ -100,6 +160,8 @@
   state.segments = state.segments || [];  // 一分一段行
   // 招生计划采集：{ running, queue:[{id,year}], index, results:{ id:{name,years:{年份:{total,rows,majors}}} } }
   state.plan = state.plan || { running: false, queue: [], index: 0, results: {} };
+  // 专业明细采集：{ running, queue, index, rows:{ 'id|年份': {majors, school, ...} } }
+  state.detail = state.detail || { running: false, queue: [], index: 0, rows: {} };
   // 采集范围：名次区间 + 最近几年（默认 1–100 名、最近 6 年）
   state.rankFrom = Number(state.rankFrom) || 1;
   state.rankTo = Number(state.rankTo) || 100;
@@ -392,6 +454,180 @@
     return lines.join('\r\n');
   }
 
+  /* ============================ A3. 专业明细 ============================ */
+  /*
+   * /school/{id}/provinceline 一次会请求两个接口：
+   *   province_score → 院校级（批次/类型/最低分/最低位次）
+   *   special_score  → 专业级（专业/最低分/最低位次/录取人数/专业组/选科）
+   * 钩子在 document-start 就装好了，所以这里只要"把每一页都点出来"即可。
+   */
+
+  const DETAIL_GAP = 1200;
+
+  const detailStore = () => state.detail.rows || (state.detail.rows = {});
+  const provincelineUrl = (id, year) => `https://www.gaokao.cn/school/${id}/provinceline?year=${year}`;
+
+  function startDetailQueue(ids, years) {
+    const queue = [];
+    for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year) });
+    state.detail.queue = queue;
+    state.detail.index = 0;
+    state.detail.running = true;
+    saveState();
+    gotoDetailTask();
+  }
+
+  function stopDetailQueue() {
+    state.detail.running = false;
+    saveState();
+    render();
+  }
+
+  function gotoDetailTask() {
+    const task = state.detail.queue[state.detail.index];
+    if (!task) {
+      state.detail.running = false;
+      saveState();
+      render();
+      log(`专业明细采集完成：${Object.keys(detailStore()).length} 个「院校×年份」`);
+      return;
+    }
+    location.href = provincelineUrl(task.id, task.year);
+  }
+
+  /** 把钩子收到的原始条目去重整理 */
+  function collectCaptured() {
+    const seen = new Set();
+    const majors = [];
+    for (const items of GK_NET.special) {
+      for (const it of items) {
+        const key = it.school_special_id || `${it.sp_name}|${it.sg_name}|${it.min}|${it.min_section}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        majors.push({
+          major: `${it.sp_name || ''}${it.remark ? ' ' + it.remark : ''}`.trim(),
+          minScore: it.min && it.min !== '-' ? Number(it.min) : null,
+          maxScore: it.max && it.max !== '-' ? Number(it.max) : null,
+          minRank: it.min_section && it.min_section !== '-' ? Number(it.min_section) : null,
+          maxRank: null,
+          volume: it.lq_num && it.lq_num !== '-' ? Number(it.lq_num) : 0,
+          group: it.sg_name || '',
+          xuanke: it.sg_info || '',
+          batch: it.local_batch_name || it.zslx_name || '',
+        });
+      }
+    }
+
+    const seenSchool = new Set();
+    const school = [];
+    for (const items of GK_NET.province) {
+      for (const it of items) {
+        const key = `${it.local_batch_name}|${it.zslx_name}|${it.min}|${it.min_section}`;
+        if (seenSchool.has(key)) continue;
+        seenSchool.add(key);
+        school.push({
+          batch: it.local_batch_name || '',
+          type: it.zslx_name || '',
+          minScore: it.min && it.min !== '-' ? Number(it.min) : null,
+          maxScore: it.max && it.max !== '-' ? Number(it.max) : null,
+          minRank: it.min_section && it.min_section !== '-' ? Number(it.min_section) : null,
+        });
+      }
+    }
+    return { majors, school };
+  }
+
+  const pageNumbers = () => [...document.querySelectorAll('.ant-pagination-item')]
+    .map((x) => Number((x.textContent || '').trim())).filter(Number.isFinite);
+
+  /** 在当前页把分页点完，把数据都钩下来 */
+  async function collectDetailOnPage() {
+    const first = await waitFor(
+      () => GK_NET.special.length > 0 || GK_NET.province.length > 0,
+      15000, 400,
+    );
+    if (!first) return null;
+
+    const maxPage = Math.max(1, ...pageNumbers());
+    for (let p = 2; p <= maxPage; p += 1) {
+      const before = GK_NET.special.length;
+      if (!clickPlanPage(p)) break;
+      await waitFor(() => GK_NET.special.length > before, 6000, 300);
+      await sleep(500);
+    }
+    return collectCaptured();
+  }
+
+  /** 队头命中当前页就采，然后跳到下一条 */
+  async function runDetailTaskIfNeeded() {
+    if (!state.detail.running || !IS_GK) return;
+    if (!/\/provinceline/.test(location.pathname)) return;
+
+    const task = state.detail.queue[state.detail.index];
+    if (!task) { state.detail.running = false; saveState(); render(); return; }
+
+    const id = currentSchoolId();
+    const urlYear = new URL(location.href).searchParams.get('year');
+    if (String(id) !== String(task.id) || String(urlYear) !== String(task.year)) return;
+
+    const meta = schoolById.get(String(task.id));
+    const name = meta ? meta[2] : `学校${task.id}`;
+    log(`明细采集中：${name} ${task.year}`);
+
+    // 注意：不要在这里清空 GK_NET —— 每次跳转都是新文档，缓冲区本来就是空的；
+    // 而页面的首屏请求可能比 boot 更早完成，清空会把刚到手的首屏数据抹掉。
+    const data = await collectDetailOnPage();
+    if (data) {
+      detailStore()[`${task.id}|${task.year}`] = {
+        id: task.id,
+        name,
+        location: meta ? meta[3] : '',
+        plate: meta ? meta[4] : '',
+        year: task.year,
+        province: state.province,
+        majors: data.majors,
+        school: data.school,
+      };
+      log(`${name} ${task.year}：${data.majors.length} 个专业 / ${data.school.length} 条院校线`);
+    } else {
+      log(`${name} ${task.year}：没抓到数据（可能该年未公布）`);
+    }
+
+    state.detail.index += 1;
+    saveState();
+    render();
+    await sleep(DETAIL_GAP);
+    gotoDetailTask();
+  }
+
+  /** 一张总表：年份, 省份, 院校, 所在地, 板块, 专业, 最高分, 最低分, 最高位次, 最低位次, 录取人数 */
+  function buildDetailCsv() {
+    const head = ['年份', '招生省份', '院校名称', '院校所在地', '板块', '专业名称', '最高分', '最低分', '最高位次', '最低位次', '录取人数'];
+    const lines = [head.join(',')];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+    const entries = Object.values(detailStore()).sort((a, b) => (
+      a.name.localeCompare(b.name, 'zh-CN') || Number(b.year) - Number(a.year)
+    ));
+
+    for (const item of entries) {
+      for (const m of item.majors) {
+        lines.push([
+          item.year, esc(item.province), esc(item.name), esc(item.location), item.plate,
+          esc(m.major), m.maxScore ?? '', m.minScore ?? '', m.maxRank ?? '', m.minRank ?? '', m.volume ?? 0,
+        ].join(','));
+      }
+      // 院校级兜底行：专业列写「院校最低线」
+      for (const s of item.school) {
+        lines.push([
+          item.year, esc(item.province), esc(item.name), esc(item.location), item.plate,
+          esc(`院校最低线（${s.batch || ''}${s.type ? ' ' + s.type : ''}）`), s.maxScore ?? '', s.minScore ?? '', '', s.minRank ?? '', '',
+        ].join(','));
+      }
+    }
+    return lines.join('\r\n');
+  }
+
   /* ============================ B. 通用表格 ============================ */
 
   function tableToMatrix(table) {
@@ -585,6 +821,21 @@
       const picked = selectedSchools().length;
       rangeHint.textContent = `第 ${state.rankFrom}–${state.rankTo} 名 · 共 ${picked} 所 · 最近 ${state.yearCount} 年（榜单共 ${SCHOOLS.length} 所）`;
     }
+
+    const detailStatus = panel.querySelector('.gk-detail-status');
+    if (detailStatus) {
+      const got = Object.keys(detailStore()).length;
+      const majors = Object.values(detailStore()).reduce((n, x) => n + (x.majors?.length ?? 0), 0);
+      const q = state.detail.queue.length;
+      const i = state.detail.index;
+      if (state.detail.running) {
+        const task = state.detail.queue[i];
+        const meta = task ? schoolById.get(String(task.id)) : null;
+        detailStatus.textContent = `采集中 ${i + 1}/${q}：${meta ? meta[2] : task?.id ?? ''} ${task?.year ?? ''} · 已收 ${got} 组 / ${majors} 个专业`;
+      } else {
+        detailStatus.textContent = got ? `已收 ${got} 组「院校×年份」/ ${majors} 个专业` : '';
+      }
+    }
   }
 
   function buildPanel() {
@@ -637,6 +888,24 @@
               <button class="gk-one" style="flex:1;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;">抓当前页</button>
               <button class="gk-export-gk" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出院校线</button>
             </div>
+          </div>
+        </details>
+
+        <details class="gk-sec-detail" ${IS_GK ? 'open' : ''}>
+          <summary style="cursor:pointer;color:#f39c12;margin-top:8px;">专业明细（推荐，一张总表）</summary>
+          <div style="padding-top:8px;">
+            <div style="color:#6b7793;font-size:11px;margin-bottom:6px;">
+              院校线 + 每个专业的最低分 / 最低位次 / 录取人数
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:6px;">
+              <button class="gk-detail-one" style="flex:1;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;">采本校</button>
+              <button class="gk-detail-all" style="flex:1;padding:6px;background:#ec0000;color:#fff;border:none;border-radius:5px;cursor:pointer;">批量采集</button>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button class="gk-detail-stop" style="flex:1;padding:6px;background:#4a5568;color:#fff;border:none;border-radius:5px;cursor:pointer;">停止</button>
+              <button class="gk-detail-export" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出总表</button>
+            </div>
+            <div class="gk-detail-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
           </div>
         </details>
 
@@ -773,6 +1042,35 @@
       log('已停止招生计划采集');
     });
 
+    /* ---------- 专业明细 ---------- */
+    $('.gk-detail-one').addEventListener('click', () => {
+      const id = currentSchoolId();
+      if (!id) { alert('请先打开某所学校的页面'); return; }
+      if (!confirm(`采集本校最近 ${state.yearCount} 年的专业明细？（会连续跳转 ${state.yearCount} 次）`)) return;
+      startDetailQueue([id], selectedYears());
+    });
+
+    $('.gk-detail-all').addEventListener('click', () => {
+      if (state.detail.running) { log('明细已经在跑了，先停止再重开'); return; }
+      const list = selectedSchools();
+      if (!list.length) { alert('这个名次区间里没有学校'); return; }
+      const msg = `采集第 ${state.rankFrom}–${state.rankTo} 名共 ${list.length} 所 × ${state.yearCount} 年的专业明细？\n`
+        + `共 ${list.length * state.yearCount} 个页面，每个页面 2–5 页数据。可以随时停止，进度会保留。`;
+      if (!confirm(msg)) return;
+      startDetailQueue(list.map((s) => String(s[1])), selectedYears());
+    });
+
+    $('.gk-detail-stop').addEventListener('click', () => {
+      stopDetailQueue();
+      log('已停止专业明细采集');
+    });
+
+    $('.gk-detail-export').addEventListener('click', () => {
+      const csv = buildDetailCsv();
+      if (csv.split('\r\n').length <= 1) { alert('还没有专业明细数据'); return; }
+      download(`高考顺_专业明细_${state.province}.csv`, csv);
+    });
+
     $('.gk-plan-export').addEventListener('click', () => {
       const csv = buildPlanCsv();
       if (csv.split('\r\n').length <= 1) { alert('还没有招生计划数据'); return; }
@@ -888,6 +1186,7 @@
       applyProvinceIfNeeded();
       runIfBatch().catch((e) => log('异常：' + e.message));
       runPlanTaskIfNeeded().catch((e) => log('计划采集异常：' + e.message));
+      runDetailTaskIfNeeded().catch((e) => log('明细采集异常：' + e.message));
     }
   }
 
