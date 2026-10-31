@@ -523,7 +523,9 @@
           maxScore: it.max && it.max !== '-' ? Number(it.max) : null,
           minRank: it.min_section && it.min_section !== '-' ? Number(it.min_section) : null,
           maxRank: null,
-          volume: it.lq_num && it.lq_num !== '-' ? Number(it.lq_num) : 0,
+          // lq_num 是「录取人数」，不是「计划招生」。站点只对部分年份公布，
+          // 2021–2023 大量是 "-" —— 这种情况必须留空，写 0 会让人以为"真的招了 0 人"。
+          volume: it.lq_num && it.lq_num !== '-' ? Number(it.lq_num) : null,
           group: it.sg_name || '',
           xuanke: it.sg_info || '',
           batch: it.local_batch_name || it.zslx_name || '',
@@ -645,7 +647,7 @@
       for (const m of item.majors) {
         lines.push([
           item.year, esc(item.province), esc(item.name), esc(item.location), item.plate,
-          esc(m.major), m.maxScore ?? '', m.minScore ?? '', m.maxRank ?? '', m.minRank ?? '', m.volume ?? 0,
+          esc(m.major), m.maxScore ?? '', m.minScore ?? '', m.maxRank ?? '', m.minRank ?? '', m.volume ?? '',
         ].join(','));
       }
       // 院校级兜底行：专业列写「院校最低线」

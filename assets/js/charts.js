@@ -171,6 +171,16 @@ export function createChartController(echarts, elements) {
       yAxis: {
         scale: true,
         inverse,
+        // 上下各留 8% 空白：否则最高/最低那根 K 线会贴边被裁掉一半，
+        // 顶部的标注图钉（markPoint）也会溢出画布。
+        min: (v) => {
+          const pad = (v.max - v.min) * 0.08 || Math.abs(v.max) * 0.02 || 1;
+          return v.min - pad;
+        },
+        max: (v) => {
+          const pad = (v.max - v.min) * 0.08 || Math.abs(v.max) * 0.02 || 1;
+          return v.max + pad;
+        },
         axisLine: { show: false },
         axisLabel: {
           ...AXIS_TEXT,
@@ -244,6 +254,8 @@ export function createChartController(echarts, elements) {
         axisTick: { show: false },
       },
       yAxis: {
+        // 柱子顶部也要留白，否则最高的那根会顶到框线、数值标签被切
+        max: (v) => (v.max > 0 ? Math.ceil(v.max * 1.12) : 10),
         axisLine: { show: false },
         axisLabel: { ...AXIS_TEXT, fontSize: 10, formatter: (value) => formatNumber(value) },
         splitLine: { lineStyle: { color: COLORS.grid, type: 'dashed' } },
