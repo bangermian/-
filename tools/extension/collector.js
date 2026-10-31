@@ -854,12 +854,18 @@
       const majors = Object.values(detailStore()).reduce((n, x) => n + (x.majors?.length ?? 0), 0);
       const q = state.detail.queue.length;
       const i = state.detail.index;
-      if (state.detail.running) {
+      if (!window.__gkNet) {
+        // 钩子没装上 = 采集一定拿不到数据，先把这个说出来，别让用户以为是"没公布"
+        detailStatus.textContent = '⚠ 网络钩子未生效：脚本没能在页面脚本之前运行。请刷新页面；若用扩展，确认 manifest 的 run_at 是 document_start。';
+        detailStatus.style.color = '#f39c12';
+      } else if (state.detail.running) {
         const task = state.detail.queue[i];
         const meta = task ? schoolById.get(String(task.id)) : null;
+        detailStatus.style.color = '#9aa6bd';
         detailStatus.textContent = `采集中 ${i + 1}/${q}：${meta ? meta[2] : task?.id ?? ''} ${task?.year ?? ''} · 已收 ${got} 组 / ${majors} 个专业`;
       } else {
-        detailStatus.textContent = got ? `已收 ${got} 组「院校×年份」/ ${majors} 个专业` : '';
+        detailStatus.style.color = '#9aa6bd';
+        detailStatus.textContent = got ? `已收 ${got} 组「院校×年份」/ ${majors} 个专业` : '钩子正常，尚未采集';
       }
     }
   }
