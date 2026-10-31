@@ -667,7 +667,8 @@
    * 换年份逐年拉即可——既拿到分数→位次换算表，又拿到百分位要用的分母。
    */
 
-  const SEG_YEARS = ['2026', '2025', '2024', '2023', '2022', '2021'];
+  // 站点上能找到 2016 起的分段表，每年一条静态 JSON，全拉也不贵
+  const SEG_YEARS = ['2026', '2025', '2024', '2023', '2022', '2021', '2020', '2019', '2018', '2017', '2016'];
   const segResult = () => state.segFetch || (state.segFetch = { rows: [] });
 
   /** 从页面已发出的请求里找出模板，例如 .../section2021/2026/12/3/1/lists.json */
@@ -1002,6 +1003,18 @@
         </div>
         <div class="gk-detail-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;margin-bottom:6px;"></div>
 
+        <details class="gk-sec-seg" open>
+          <summary style="cursor:pointer;color:#f39c12;margin-top:8px;">一分一段表（顺带算出考生总数）</summary>
+          <div style="padding-top:8px;">
+            <div style="color:#6b7793;font-size:11px;margin-bottom:6px;">
+              先在 <b>/colleges/bypart</b> 页面打开一次，再回来点采集；一次拿 6 年
+            </div>
+            <button class="gk-seg-fetch" style="width:100%;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;margin-bottom:6px;">采集 6 年一分一段</button>
+            <button class="gk-seg-export" style="width:100%;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出一分一段 CSV</button>
+            <div class="gk-seg-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
+          </div>
+        </details>
+
         <details class="gk-sec-more">
           <summary style="cursor:pointer;color:#6b7793;font-size:11px;">分项功能（一般不用）</summary>
 
@@ -1049,18 +1062,6 @@
               <button class="gk-plan-export" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出计划</button>
             </div>
             <div class="gk-plan-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
-          </div>
-        </details>
-
-        <details class="gk-sec-seg" open>
-          <summary style="cursor:pointer;color:#f39c12;margin-top:8px;">一分一段表（顺带算出考生总数）</summary>
-          <div style="padding-top:8px;">
-            <div style="color:#6b7793;font-size:11px;margin-bottom:6px;">
-              先在 <b>/colleges/bypart</b> 页面打开一次，再回来点采集；一次拿 6 年
-            </div>
-            <button class="gk-seg-fetch" style="width:100%;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;margin-bottom:6px;">采集 6 年一分一段</button>
-            <button class="gk-seg-export" style="width:100%;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出一分一段 CSV</button>
-            <div class="gk-seg-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
           </div>
         </details>
 
