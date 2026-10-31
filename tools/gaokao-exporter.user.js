@@ -161,6 +161,8 @@
   state.plan = state.plan || { running: false, queue: [], index: 0, results: {} };
   // 专业明细采集：{ running, queue, index, rows:{ 'id|年份': {majors, school, ...} } }
   state.detail = state.detail || { running: false, queue: [], index: 0, rows: {} };
+  // 一分一段采集结果：{ rows: [{year,province,score,cumulative}], province, at }
+  state.segFetch = state.segFetch || { rows: [] };
   // 采集范围：名次区间 + 最近几年（默认 1–100 名、最近 6 年）
   state.rankFrom = Number(state.rankFrom) || 1;
   state.rankTo = Number(state.rankTo) || 100;
@@ -461,7 +463,7 @@
    * 钩子在 document-start 就装好了，所以这里只要"把每一页都点出来"即可。
    */
 
-  const DETAIL_GAP = 1200;
+  const DETAIL_GAP = 400;      // 两所学校之间只歇 0.4s，整体快一倍多
 
   const detailStore = () => state.detail.rows || (state.detail.rows = {});
   const provincelineUrl = (id, year) => `https://www.gaokao.cn/school/${id}/provinceline?year=${year}`;
@@ -554,30 +556,33 @@
   async function collectDetailOnPage() {
     const first = await waitFor(
       () => GK_NET.special.length > 0 || GK_NET.province.length > 0,
-      15000, 400,
+      15000, 150,
     );
     if (!first) return null;
 
     // 分页器是数据回来之后才渲染的，必须等它出现，
     // 否则 pageNumbers() 为空 → maxPage 算成 1 → 后面几页全丢（这个坑踩过一次）
-    await waitFor(() => pageNumbers().length > 0, 6000, 300);
-    await sleep(1000);   // 等 React 把分页器的 click 处理器挂上
+    await waitFor(() => pageNumbers().length > 0, 4000, 150);
 
     let page = 1;
     const nums0 = pageNumbers();
+    const maxPage0 = nums0.length ? Math.max(...nums0) : 1;
     log(`明细翻页：页码 ${JSON.stringify(nums0)}，已收 ${GK_NET.special.length} 组`);
-    for (let guard = 0; guard < 20; guard += 1) {
-      const nums = pageNumbers();
-      const maxPage = nums.length ? Math.max(...nums) : 1;
-      if (page >= maxPage) break;
 
-      const target = page + 1;
-      const before = GK_NET.special.length;
-      if (!clickPlanPage(target)) { log(`第 ${target} 页点不到`); break; }
-      const grew = await waitFor(() => GK_NET.special.length > before, 8000, 300);
-      if (!grew) { log(`第 ${target} 页点了没反应`); break; }
-      page = target;
-      await sleep(400);
+    // 连点所有页，不再"一页一等"——每等一轮光等网络就要 2–4 秒。
+    // 点完再统一等"数量不再增长"，把 N 次串行等待压成一次。
+    for (let p = 2; p <= maxPage0; p += 1) {
+      if (!clickPlanPage(p)) break;
+      page = p;
+      await sleep(350);
+    }
+
+    // 等稳定：连续两轮数量不变就算完（最多等 6 秒）
+    let last = -1;
+    for (let i = 0; i < 24; i += 1) {
+      await sleep(250);
+      if (GK_NET.special.length === last && GK_NET.special.length > 0) break;
+      last = GK_NET.special.length;
     }
     log(`明细翻页结束：到第 ${page} 页，共 ${GK_NET.special.length} 组`);
     return collectCaptured();
@@ -649,6 +654,75 @@
           esc(`院校最低线（${s.batch || ''}${s.type ? ' ' + s.type : ''}）`), s.maxScore ?? '', s.minScore ?? '', '', s.minRank ?? '', '',
         ].join(','));
       }
+    }
+    return lines.join('\r\n');
+  }
+
+  /* ============================ A4. 一分一段 ============================ */
+  /*
+   * 一分一段表不是分页接口，而是一份静态 JSON：
+   *   static-data.gaokao.cn/www/2.0/section2021/{年份}/{省份ID}/{科类ID}/{批次ID}/lists.json
+   * 一条请求就是整张表（天津 2026 有 381 行），末行"累计人数"正好是该年考生总数。
+   * 所以：页面打开一次（/colleges/bypart），插件从 performance 里取到 URL 模板，
+   * 换年份逐年拉即可——既拿到分数→位次换算表，又拿到百分位要用的分母。
+   */
+
+  const SEG_YEARS = ['2026', '2025', '2024', '2023', '2022', '2021'];
+  const segResult = () => state.segFetch || (state.segFetch = { rows: [] });
+
+  /** 从页面已发出的请求里找出模板，例如 .../section2021/2026/12/3/1/lists.json */
+  function findSegmentTemplate() {
+    const urls = performance.getEntriesByType('resource').map((r) => r.name);
+    return urls.find((u) => /section2021\/\d{4}\/\d+\/\d+\/\d+\/lists\.json/.test(u)) || null;
+  }
+
+  async function collectSegments(opts = {}) {
+    const tpl = findSegmentTemplate();
+    if (!tpl) {
+      log('没找到一分一段数据源：请先打开 https://www.gaokao.cn/colleges/bypart');
+      return { ok: false, reason: 'no-template' };
+    }
+    const m = tpl.match(/section2021\/(\d{4})\/(\d+)\/(\d+)\/(\d+)\/lists\.json/);
+    if (!m) return { ok: false, reason: 'bad-template' };
+    const [, , pid, typeId, batchId] = m;
+    const province = localStorage.getItem('localprovincename') || state.province;
+
+    const rows = [];
+    let done = 0;
+    for (const year of SEG_YEARS) {
+      const url = `https://static-data.gaokao.cn/www/2.0/section2021/${year}/${pid}/${typeId}/${batchId}/lists.json`;
+      try {
+        const resp = await fetch(url, { cache: 'no-store' });
+        if (!resp.ok) { log(`一分一段 ${year}：HTTP ${resp.status}`); continue; }
+        const json = await resp.json();
+        const list = json?.data?.list ?? [];
+        for (const row of list) {
+          const scoreText = String(row.score ?? '');
+          const score = Number((scoreText.match(/\d{2,3}/) || [])[0]);
+          const cumulative = Number(row.total);
+          if (Number.isFinite(score) && Number.isFinite(cumulative)) {
+            rows.push({ year, province, score, cumulative });
+          }
+        }
+        done += 1;
+        log(`一分一段 ${year}：${list.length} 行（累计到 ${list.at(-1)?.total ?? '-'}）`);
+      } catch (e) {
+        log(`一分一段 ${year} 失败：${e.message}`);
+      }
+      await sleep(500);
+    }
+
+    state.segFetch = { rows, province, at: Date.now() };
+    saveState();
+    render();
+    return { ok: rows.length > 0, rows: rows.length, years: done };
+  }
+
+  function buildSegmentCsvFromFetch() {
+    const lines = ['年份,省份,分数,累计人数'];
+    const rows = segResult().rows || [];
+    for (const r of [...rows].sort((a, b) => a.year - b.year || b.score - a.score)) {
+      lines.push([r.year, r.province, r.score, r.cumulative].join(','));
     }
     return lines.join('\r\n');
   }
@@ -840,6 +914,15 @@
       }
     }
 
+    const segStatus = panel.querySelector('.gk-seg-status');
+    if (segStatus) {
+      const rows = segResult().rows?.length ?? 0;
+      const years = new Set((segResult().rows || []).map((r) => r.year));
+      segStatus.textContent = rows
+        ? `已采 ${rows} 行 / ${years.size} 年（${segResult().province || ''}）· 末行累计人数即考生总数`
+        : '';
+    }
+
     // 名次区间提示：一眼看到"这次会跑多少所、几年"
     const rangeHint = panel.querySelector('.gk-range-hint');
     if (rangeHint) {
@@ -966,6 +1049,18 @@
               <button class="gk-plan-export" style="flex:1;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出计划</button>
             </div>
             <div class="gk-plan-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
+          </div>
+        </details>
+
+        <details class="gk-sec-seg" open>
+          <summary style="cursor:pointer;color:#f39c12;margin-top:8px;">一分一段表（顺带算出考生总数）</summary>
+          <div style="padding-top:8px;">
+            <div style="color:#6b7793;font-size:11px;margin-bottom:6px;">
+              先在 <b>/colleges/bypart</b> 页面打开一次，再回来点采集；一次拿 6 年
+            </div>
+            <button class="gk-seg-fetch" style="width:100%;padding:6px;background:#0f3460;color:#fff;border:none;border-radius:5px;cursor:pointer;margin-bottom:6px;">采集 6 年一分一段</button>
+            <button class="gk-seg-export" style="width:100%;padding:6px;background:#1f9d55;color:#fff;border:none;border-radius:5px;cursor:pointer;">导出一分一段 CSV</button>
+            <div class="gk-seg-status" style="margin-top:6px;color:#9aa6bd;font-size:11px;"></div>
           </div>
         </details>
 
@@ -1100,6 +1195,25 @@
         + `预计：约 ${minutes} 分钟，可随时停止，进度会保留\n\n开始？`;
       if (!confirm(msg)) return;
       startDetailQueue(list.map((s) => String(s[1])), selectedYears());
+    });
+
+    /* ---------- 一分一段 ---------- */
+    $('.gk-seg-fetch').addEventListener('click', async () => {
+      const btn = $('.gk-seg-fetch');
+      btn.disabled = true;
+      btn.textContent = '采集中…';
+      const r = await collectSegments();
+      btn.disabled = false;
+      btn.textContent = '采集 6 年一分一段';
+      if (r.ok) log(`一分一段完成：${r.rows} 行 / ${r.years} 年`);
+      else alert('没找到一分一段数据源：请先打开 /colleges/bypart（一分一段页）再点采集');
+    });
+
+    $('.gk-seg-export').addEventListener('click', () => {
+      const csv = buildSegmentCsvFromFetch();
+      if (csv.split('\r\n').length <= 1) { alert('还没有一分一段数据'); return; }
+      const province = segResult().province || state.province;
+      download(`高考顺_一分一段_${province}.csv`, csv);
     });
 
     /* ---------- 专业明细 ---------- */
