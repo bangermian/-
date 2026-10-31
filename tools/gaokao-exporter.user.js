@@ -536,30 +536,21 @@
       .replace(/[\s\u3000]+/g, '');
     const main = (s) => norm(s).replace(/[（(].*$/, '');
 
-    const byFull = new Map();
+    // 两边都按「大类」聚合了：分数线那边是 专业名 去掉括号，
+    // 招生计划这边同样归并，同大类的计划数相加后再补。
     const byMain = new Map();
     for (const p of planMajors) {
-      const full = norm(p.name);
-      byFull.set(full, (byFull.get(full) || 0) + (Number(p.plan) || 0));
-      const m = main(p.name);
-      if (!byMain.has(m)) byMain.set(m, []);
-      byMain.get(m).push(Number(p.plan) || 0);
+      const key = main(p.name);
+      byMain.set(key, (byMain.get(key) || 0) + (Number(p.plan) || 0));
     }
 
     let filled = 0;
     for (const mj of rec.majors) {
       if (mj.volume != null) continue;              // 已有真实录取人数，不动
-      const full = norm(mj.major);
-      if (byFull.has(full) && byFull.get(full) > 0) {
-        mj.volume = byFull.get(full);
-        mj.volumeFrom = 'plan';
-        filled += 1;
-        continue;
-      }
-      // 退一步只按主名匹配；同名有多条（不同专业组）时不猜，留空
-      const list = byMain.get(main(mj.major));
-      if (list && list.length === 1 && list[0] > 0) {
-        mj.volume = list[0];
+      const key = main(mj.major);
+      const plan = byMain.get(key);
+      if (plan > 0) {
+        mj.volume = plan;
         mj.volumeFrom = 'plan';
         filled += 1;
       }
@@ -567,32 +558,54 @@
     return filled;
   }
 
-  /** 把钩子收到的原始条目去重整理 */
+  /** 把钩子收到的原始条目去重、按「专业大类」合并整理 */
   function collectCaptured() {
-    const seen = new Set();
-    const majors = [];
+    /*
+     * 站点会把同一个专业拆成多条：机器人工程（荣誉项目班）和 机器人工程（荣誉项目班；校本部）
+     * 其实是同一个专业的不同班型/校区。按用户口径：专业名只取「（」之前的部分，
+     * 同一大类的多条合并——人数相加、最低分取最低、最低位次取最大（最差）。
+     */
+    const baseName = (s) => String(s || '').split(/[（(]/)[0].trim() || '（未命名专业）';
+
+    const groups = new Map();
     for (const items of GK_NET.special) {
       for (const it of items) {
-        // 去重键不能用 school_special_id：同校多个专业会重复，
-        // 会把 15 条压成 7 条（踩过）。用全字段组合。
-        const key = [it.sp_name, it.remark, it.sg_name, it.min, it.min_section, it.lq_num].join('\u0001');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        majors.push({
-          major: `${it.sp_name || ''}${it.remark ? ' ' + it.remark : ''}`.trim(),
-          minScore: it.min && it.min !== '-' ? Number(it.min) : null,
-          maxScore: it.max && it.max !== '-' ? Number(it.max) : null,
-          minRank: it.min_section && it.min_section !== '-' ? Number(it.min_section) : null,
-          maxRank: null,
-          // lq_num 是「录取人数」，不是「计划招生」。站点只对部分年份公布，
-          // 2021–2023 大量是 "-" —— 这种情况必须留空，写 0 会让人以为"真的招了 0 人"。
-          volume: it.lq_num && it.lq_num !== '-' ? Number(it.lq_num) : null,
-          group: it.sg_name || '',
-          xuanke: it.sg_info || '',
-          batch: it.local_batch_name || it.zslx_name || '',
-        });
+        const name = baseName(it.sp_name);
+        const min = it.min && it.min !== '-' ? Number(it.min) : null;
+        const max = it.max && it.max !== '-' ? Number(it.max) : null;
+        const rank = it.min_section && it.min_section !== '-' ? Number(it.min_section) : null;
+        // lq_num 是「录取人数」，站点只对部分年份公布，"-" 必须留空（写 0 会误导）
+        const lq = it.lq_num && it.lq_num !== '-' ? Number(it.lq_num) : null;
+
+        let g = groups.get(name);
+        if (!g) {
+          g = {
+            major: name, minScore: null, maxScore: null, minRank: null,
+            volume: null, hasVolume: false, groups: new Set(), xuanke: new Set(), variants: 0,
+          };
+          groups.set(name, g);
+        }
+        g.variants += 1;
+        if (min != null) g.minScore = g.minScore == null ? min : Math.min(g.minScore, min);
+        if (max != null) g.maxScore = g.maxScore == null ? max : Math.max(g.maxScore, max);
+        if (rank != null) g.minRank = g.minRank == null ? rank : Math.max(g.minRank, rank);
+        if (lq != null) { g.volume = (g.volume || 0) + lq; g.hasVolume = true; }
+        if (it.sg_name) g.groups.add(it.sg_name);
+        if (it.sg_info) g.xuanke.add(it.sg_info);
       }
     }
+
+    const majors = [...groups.values()].map((g) => ({
+      major: g.major,
+      minScore: g.minScore,
+      maxScore: g.maxScore,
+      minRank: g.minRank,
+      maxRank: null,
+      volume: g.hasVolume ? g.volume : null,
+      group: [...g.groups].join(' '),
+      xuanke: [...g.xuanke].join(' / '),
+      variants: g.variants,
+    }));
 
     const seenSchool = new Set();
     const school = [];
