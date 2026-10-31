@@ -6,6 +6,9 @@
 
 import assert from 'node:assert/strict';
 import {
+  aggregateMajors, csvCell, csvRow, parseArgs, parseCsv,
+} from './crawl.mjs';
+import {
   attachPercentiles, detectOutliers, movingAverage, quantile, toCandles, yearlyAggregate,
 } from '../assets/js/aggregate.js';
 import { computeIndices } from '../assets/js/indices.js';
@@ -580,6 +583,55 @@ test('样本过少的年份会被打标', () => {
   const majors = { A: [{ year: 2025, highRank: 1000, lowRank: 2000, lowScore: 600, highScore: 600, volume: 5 }] };
   const candles = toCandles(yearlyAggregate(majors));
   assert.equal(candles[0].lowSample, true);
+});
+
+/* ------------------------------ 直连抓取（crawl.mjs） ------------------------------ */
+
+test('抓取：专业按大类聚合，人数相加、最低分取最低、位次取最大', () => {
+  const agg = aggregateMajors([
+    { sp_name: '机器人工程', min: '705', min_section: '900', lq_num: '2' },
+    { sp_name: '机器人工程 （荣誉项目班）', min: '700', min_section: '1200', lq_num: '3' },
+    { sp_name: '机器人工程 （荣誉项目班；校本部）', min: '702', min_section: '1100', lq_num: '-' },
+  ]);
+  assert.equal(agg.length, 1);
+  const g = agg[0];
+  assert.equal(g.major, '机器人工程');
+  assert.equal(g.minScore, 700);   // 最低分取最低 = 最好考的那条线
+  assert.equal(g.minRank, 1200);   // 最低位次取最大 = 最差的名次
+  assert.equal(g.volume, 5);       // 2 + 3，"-" 不计入
+  assert.equal(g.variants, 3);
+});
+
+test('抓取：全部人数都是 "-" 时留空而不是 0', () => {
+  const agg = aggregateMajors([{ sp_name: '工科试验班', min: '690', min_section: '800', lq_num: '-' }]);
+  assert.equal(agg[0].volume, null);
+});
+
+test('抓取：CSV 转义（逗号/引号/换行）', () => {
+  assert.equal(csvCell('清华'), '清华');
+  assert.equal(csvCell('a,b'), '"a,b"');
+  assert.equal(csvCell('说"好"'), '"说""好"""');
+  assert.equal(csvRow(['2024', '天津', 'a,b']), '2024,天津,"a,b"');
+});
+
+test('抓取：CSV 解析能吃回带引号的字段', () => {
+  const rows = parseCsv('年份,专业名称\r\n2024,"计算机, 软件"\r\n2023,"说""好"""');
+  assert.deepEqual(rows[0], ['年份', '专业名称']);
+  assert.deepEqual(rows[1], ['2024', '计算机, 软件']);
+  assert.deepEqual(rows[2], ['2023', '说"好"']);
+});
+
+test('抓取：命令行参数解析与钳制', () => {
+  const a = parseArgs(['--province', '天津', '--from', '1', '--to', '200', '--years', '2025,2024', '-c', '9']);
+  assert.equal(a.province, '天津');
+  assert.equal(a.from, 1);
+  assert.equal(a.to, 200);
+  assert.deepEqual(a.years, [2025, 2024]);
+  assert.equal(a.concurrency, 8);           // 上限 8
+
+  const b = parseArgs(['--from', '10', '--to', '3']);
+  assert.equal(b.to, 10);                   // to < from 时纠正
+  assert.equal(b.concurrency, 4);           // 默认值
 });
 
 /* ------------------------------ 执行 ------------------------------ */

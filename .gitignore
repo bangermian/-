@@ -19,3 +19,7 @@ desktop.ini
 
 # 自动化专用 Chrome 配置（含登录态，绝不入库）
 .chrome-auto/
+
+# 抓取产物与断点（体积大、可重跑）
+out/
+.cache/

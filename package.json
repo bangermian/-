@@ -7,7 +7,8 @@
   "license": "MIT",
   "scripts": {
     "start": "node tools/serve.mjs",
-    "test": "node tools/verify.mjs"
+    "test": "node tools/verify.mjs",
+    "crawl": "node tools/crawl.mjs"
   },
   "engines": {
     "node": ">=18"
