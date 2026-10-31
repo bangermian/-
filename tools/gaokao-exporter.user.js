@@ -99,7 +99,38 @@
   ];
 
   const YEARS = ['2026', '2025', '2024', '2023', '2022', '2021'];
-  const STATE_KEY = 'gaokaoshun.state.v2';
+
+  /*
+   * 分片（并发标签页）机制
+   *   主标签页把任务切成 N 份，用 window.open 开 N-1 个子标签页，URL 上带 #gk-shard=i。
+   *   子标签页把 shard 号记进 sessionStorage（跳转时会丢 hash，但 sessionStorage 跟标签页走），
+   *   然后用**自己独立的 state 键**读写，互不覆盖。
+   *   导出时把所有分片合并。
+   */
+  const SHARD_PLAN_KEY = 'gaokaoshun.shardplan.v1';
+  const readShardId = () => {
+    try {
+      // 站点路由会把 URL 的 hash 和自定义查询参数都抹掉，window.name 也会被重置，
+      // 所以分片号只能靠「当前页面的 校+年」去主标签页留下的计划里对号入座。
+      const saved0 = sessionStorage.getItem('gkShard');
+      if (saved0 != null) return Number(saved0);
+
+      let plan = null;
+      try { plan = JSON.parse(localStorage.getItem(SHARD_PLAN_KEY) || 'null'); } catch { plan = null; }
+      if (plan?.starts?.length) {
+        const id = (/\/school\/(\d+)/.exec(location.pathname) || [])[1];
+        const year = new URL(location.href).searchParams.get('year');
+        const hit = plan.starts.find((s) => s.shard !== 0
+          && String(s.id) === String(id) && String(s.year) === String(year));
+        if (hit) { sessionStorage.setItem('gkShard', String(hit.shard)); return hit.shard; }
+      }
+      return null;
+    } catch { return null; }
+  };
+  const SHARD = readShardId();
+  const stateKeyFor = (shard) => (shard == null ? 'gaokaoshun.state.v2' : `gaokaoshun.state.shard${shard}.v2`);
+
+  const STATE_KEY = stateKeyFor(SHARD);
   const MAP_KEY = 'gaokaoshun.mapping.v1';
   const CAPTURE_TIMEOUT = 15000;
   const BETWEEN_SCHOOLS = 2500;
@@ -484,7 +515,15 @@
       const queue = [];
       // phase: 'detail' 抓分数线；缺人数时会插入一条 phase:'plan' 补计划数
       for (const id of ids) for (const year of years) queue.push({ id: String(id), year: String(year), phase: 'detail' });
+
+      // 并发分片实测走不通，已退回单页：
+      //   · 站点路由会抹掉 URL 的 hash 和自定义查询参数，window.name 也会被重置，
+      //     分片号传不过去（尝试过三种载体）
+      //   · 更要命的是 Chrome 会节流/冻结后台标签页的定时器：
+      //     新开标签页抢到焦点后，主标签页的等待循环直接停摆，队列卡死
+      // 单页串行 + 前面那轮提速（翻页改批量点、间隔缩短）已经是稳妥上限。
       state.detail.queue = queue;
+
       state.detail.index = 0;
       state.detail.running = true;
       saveState();
@@ -665,6 +704,30 @@
     return collectCaptured();
   }
 
+  /**
+   * 子标签页：从主标签页留下的分片计划里认领自己那份，然后开跑。
+   * 分片号来自 URL 的 #gk-shard=i，之后靠 sessionStorage 记住（跳转会丢 hash）。
+   */
+  function adoptShardIfNeeded() {
+    if (SHARD == null) return false;
+    if (state.detail?.running) return false;
+
+    let plan = null;
+    try { plan = JSON.parse(localStorage.getItem(SHARD_PLAN_KEY) || 'null'); } catch { plan = null; }
+    const tasks = plan?.shards?.[SHARD];
+    if (!tasks?.length) return false;
+
+    state.detail = { running: true, queue: tasks, index: 0, rows: {} };
+    saveState();
+    log(`子标签页 ${SHARD}：认领 ${tasks.length} 条任务`);
+
+    const first = tasks[0];
+    const id = currentSchoolId();
+    const y = new URL(location.href).searchParams.get('year');
+    if (String(id) !== String(first.id) || String(y) !== String(first.year)) gotoDetailTask();
+    return true;
+  }
+
   /** 队头命中当前页就采，然后跳到下一条 */
   async function runDetailTaskIfNeeded() {
     if (!state.detail.running || !IS_GK) return;
@@ -732,13 +795,30 @@
     gotoDetailTask();
   }
 
+  /**
+   * 合并所有分片的结果（并发抓取时每个标签页各写各的 state 键）。
+   * 单页模式下就是自己的那份。
+   */
+  function allDetailRows() {
+    const merged = { ...detailStore() };
+    for (let i = 0; i < 4; i += 1) {
+      try {
+        const raw = localStorage.getItem(stateKeyFor(i));
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        Object.assign(merged, parsed?.detail?.rows || {});
+      } catch { /* 单个分片坏了不影响其它 */ }
+    }
+    return merged;
+  }
+
   /** 一张总表：年份, 省份, 院校, 所在地, 板块, 专业, 最高分, 最低分, 最高位次, 最低位次, 录取人数 */
   function buildDetailCsv() {
     const head = ['年份', '招生省份', '院校名称', '院校所在地', '板块', '专业名称', '最高分', '最低分', '最高位次', '最低位次', '录取人数'];
     const lines = [head.join(',')];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
-    const entries = Object.values(detailStore()).sort((a, b) => (
+    const entries = Object.values(allDetailRows()).sort((a, b) => (
       a.name.localeCompare(b.name, 'zh-CN') || Number(b.year) - Number(a.year)
     ));
 
@@ -1044,8 +1124,9 @@
 
     const detailStatus = panel.querySelector('.gk-detail-status');
     if (detailStatus) {
-      const got = Object.keys(detailStore()).length;
-      const majors = Object.values(detailStore()).reduce((n, x) => n + (x.majors?.length ?? 0), 0);
+      const merged = allDetailRows();
+      const got = Object.keys(merged).length;
+      const majors = Object.values(merged).reduce((n, x) => n + (x.majors?.length ?? 0), 0);
       const q = state.detail.queue.length;
       const i = state.detail.index;
       if (!window.__gkNet) {
